@@ -1,0 +1,4 @@
+[submodule "deps/krcore"]
+	path = deps/krcore
+	url = https://github.com/SJTU-IPADS/krcore-artifacts.git
+    branch = develop
