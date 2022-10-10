@@ -18,5 +18,5 @@ pub trait Transport {
 
     fn tx_burst() -> Result<(), ()>; 
 
-    fn tx_flush() -> Result<(), ()>; 
+    fn tx_flush() -> Result<(), ()>;
 }

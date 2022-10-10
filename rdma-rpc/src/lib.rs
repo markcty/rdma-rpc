@@ -3,6 +3,10 @@
 use KRdmaKit::*;
 
 pub mod transport;
+pub mod server_stub;
+pub mod client_stub;
+pub mod message_buffer;
+pub mod session;
 
 #[cfg(test)]
 mod tests {
