@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate alloc;
+
 use KRdmaKit::*;
 
 pub mod transport;
