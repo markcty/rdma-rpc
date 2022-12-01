@@ -8,6 +8,23 @@ Simple user-space test:
 cargo test --features user
 ```
 
+## Installation with SoftRoce
+
+If you do not have rdma devices, please refer to this section to configure softroce.
+
+How to configure SoftRoce:
+
+1. https://github.com/datenlord/async-rdma#environment-setup
+2. https://zhuanlan.zhihu.com/p/361740115
+
+If the new version of infiniband/verbs.h is incompatible with KRCore, you will see errors on `send_flags` or `imm_data`.
+In such case, please use the version of infiniband/verbs.h [here](./verbs.h) to replace your version.
+
+```bash
+cp /usr/include/infiniband/verbs.h /usr/include/infiniband/verbs.h.bak
+cp ./verbs.h /usr/include/infiniband/verbs.h
+```
+
 ## Getting started
 
 To make it easy for you to get started with GitLab, here's a list of recommended next steps.
