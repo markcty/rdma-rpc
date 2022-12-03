@@ -7,6 +7,10 @@ edition = "2021"
 
 [dependencies]
 KRdmaKit = { path="../deps/krcore/KRdmaKit"}
+env_logger = "0.10.0"
+log = "0.4.17"
+anyhow = { version = "1.0.66", default-features = false }
+clap = { version = "4.0.18", features = ["derive"] }
 
 
 [features]
