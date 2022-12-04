@@ -4,10 +4,11 @@
 
 Environment: ubuntu 20.04
 
-1. Install dependencies:
+1. Install dependencies and set rust version:
 
     ```sh
-    sudo apt install cmake llvm libibverbs-dev librdmacm-dev rdma-core
+    sudo apt install cmake llvm libibverbs-dev librdmacm-dev rdma-core clang
+    rustup override set nightly-2022-02-03
     ```
 
 2. Because the provided rdma rust bindings are used in ubuntu 16, we need to hack something to make it work.
