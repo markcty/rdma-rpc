@@ -41,3 +41,28 @@ Environment: ubuntu 20.04
     > note that you need to manually configure the `GID_IDX`, `qpn`, and `qkey` because different machine has different values. I hard coded my value for simplicity.
     * Run the server in one terminal: `cargo run --features user --example test_rdma_server`
     * Run the client in another terminal to send some message: `cargo run --features user --example test_rdma_client "hello rdma"`
+
+## Road Map
+
+### Transport
+
+* [ ] establish connection between server and client
+  * [ ] use tcp to exchange `lid`, `gid`, `qpn`, and `qkey` with server to establish rdma connection
+  * [ ] manage resources(qp, ctx, cq, etc.)
+* [ ] send and recv
+* [ ] close connection, clean up resources
+
+### Session
+
+* [ ] design structures and mechanisms like tcp package to prevent data reorder, corruption, and loss
+
+### Friendly user interface
+
+* [ ] encapusulate internals(serialization, logging, etc.)
+* [ ] Robust Error handling
+
+### More advanced features
+
+* [ ] timeout
+* [ ] retry, idempotency
+* [ ] support protobuf?
