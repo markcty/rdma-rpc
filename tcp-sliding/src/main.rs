@@ -1,5 +1,6 @@
 mod libs;
 mod tcp;
+mod config;
 use std::thread;
 use std::time;
 use tcp::client;

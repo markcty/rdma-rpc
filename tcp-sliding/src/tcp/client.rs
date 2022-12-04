@@ -1,11 +1,13 @@
 use std::io::{Read, Write};
+use std::io;
 use std::net::TcpStream;
 use std::str::from_utf8;
+use crate::config::{LOCAL_HOST};
 
 pub fn run_client() {
-    match TcpStream::connect("localhost:3333") {
+    match TcpStream::connect(LOCAL_HOST) {
         Ok(mut stream) => {
-            println!("Successfully connected to server in port 3333");
+            println!("Successfully connected to server in {}",LOCAL_HOST);
 
             let msg = b"Hello!";
 
@@ -32,4 +34,16 @@ pub fn run_client() {
         }
     }
     println!("Terminated.");
+}
+pub fn client_send() {
+    let mut stream = TcpStream::connect(LOCAL_HOST).expect("connect failed");
+
+    loop {
+        let mut input = String::new();
+        let size = io::stdin().read_line(&mut input).expect("read line failed");
+
+        stream
+            .write(&input.as_bytes()[..size])
+            .expect("write failed");
+    }
 }

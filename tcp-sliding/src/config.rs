@@ -6,6 +6,8 @@ pub const ND_CACHE__PROBE_RETRY_TIME: u64 = 1;
 pub const ND_CACHE__PROBE_RETRY_LIMIT: usize = 2;
 pub const ND_CACHE__TIME_LOOP_DELAY: u64 = 100;
 
+const WORDS: &str = "hello convenience!";
+pub const LOCAL_HOST: &str = "localhost:3333";
 pub const IP6_DAD_RETRIES: usize = 3;
 pub const IP6_DAD_DELAY: u64 = 500;
 

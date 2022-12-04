@@ -1,11 +1,8 @@
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
-// pub struct  Server{
-//     addr:String,
-//     funcs map[string];
 
-// }
+use crate::config::{LOCAL_HOST};
 pub fn run_server_background() {
     thread::spawn(|| {
         tcp_listener();
@@ -32,9 +29,9 @@ fn handle_client(mut stream: TcpStream) {
 }
 
 fn tcp_listener() {
-    let listener = TcpListener::bind("127.0.0.1:3333").unwrap();
+    let listener = TcpListener::bind(LOCAL_HOST).unwrap();
     // accept connections and process them, spawning a new thread for each one
-    println!("Server listening on port 3333");
+    println!("Server listening on {}\n",LOCAL_HOST);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
