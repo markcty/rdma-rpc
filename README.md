@@ -119,5 +119,5 @@ If you have run out of energy or time for your project, put a note at the top of
 
 mount file share
 ```bash
-sudo mount -t vboxsf rdma-rpc /mnt
+sudo mount -t vboxsf rust_src /mnt
 ```

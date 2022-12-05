@@ -1,6 +1,6 @@
+mod config;
 mod libs;
 mod tcp;
-mod config;
 use std::thread;
 use std::time;
 use tcp::client;
@@ -10,5 +10,6 @@ fn main() {
     println!("hello world");
     server::run_server_background();
     thread::sleep(time::Duration::from_secs(1));
-    client::run_client();
+    // client::run_client();
+    client::client_send_test();
 }
