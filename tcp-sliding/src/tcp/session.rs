@@ -1,5 +1,5 @@
+use crate::config::SendCase;
 use crate::config::{FRAME_CONTENT_MAX_LEN, SEND_CASE};
-use crate::tcp::config::SendCase;
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use std::io::{Read, Write};
 use std::net::TcpStream;

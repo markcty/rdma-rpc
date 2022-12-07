@@ -3,6 +3,7 @@ use crate::tcp::types::*;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
+use std::time::Duration;
 pub fn run_server_background() {
     thread::spawn(|| {
         tcp_listener();
@@ -20,6 +21,7 @@ fn handle_client(mut stream: TcpStream) {
                 ack: get_message.id,
             };
             let reply_data = unsafe { serialize_any(&resp) };
+            std::thread::sleep(Duration::from_secs(1));
             stream.write(&reply_data).unwrap();
             true
         }
