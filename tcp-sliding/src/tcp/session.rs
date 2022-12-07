@@ -11,15 +11,19 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(server_addr: &str) -> Session {
-        Session {
-            stream: TcpStream::connect(server_addr).expect("connect failed"),
-            send_case: SendCase::Normal,
+    pub fn new(server_addr: &str) -> Result<Session, ()> {
+        match TcpStream::connect(server_addr) {
+            Ok(tcp_stream) => Ok(Session {
+                stream: tcp_stream,
+                send_case: SendCase::Normal,
+            }),
+            Err(_) => Err(()),
         }
     }
-    pub fn send(self, data: &[u8]) {
+    pub fn send(self, data: &[u8]) -> Result<usize, ()> {
         let msg_total_num = (data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE;
         println!("message size = {}", msg_total_num);
+        let mut send_count: usize = 0;
         let mut idx: u32 = 0;
         while idx < msg_total_num as u32 {
             let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
@@ -32,7 +36,15 @@ impl Session {
                     .expect("slice with incorrect length"),
             };
             println!("assemble msg = {:?}", send_msg);
-            message_send(&self.stream, send_msg);
+
+            match message_send(&self.stream, send_msg) {
+                Ok(num) => {
+                    send_count += num;
+                }
+                Err(_) => {
+                    return Err(());
+                }
+            }
             let get_resp = wait_response(&self.stream).unwrap();
             println!("[client][get] {:?}", get_resp);
             if get_resp.ack != send_msg.id {
@@ -40,16 +52,18 @@ impl Session {
             }
             idx += 1;
         }
+        Ok(send_count)
     }
 }
-fn message_send(mut stream: &TcpStream, msg: Message) {
+fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
     let msg_serial = unsafe { serialize_any(&msg) };
     match SEND_CASE {
-        SendCase::Normal => {
-            stream.write(msg_serial).unwrap();
-        }
-        SendCase::MayLoss => {}
-        SendCase::MayOverTime => {}
+        SendCase::Normal => match stream.write(msg_serial) {
+            Ok(num) => Ok(num),
+            Err(_) => Err(()),
+        },
+        SendCase::MayLoss => Ok(0),
+        SendCase::MayOverTime => Ok(0),
     }
 }
 fn wait_response(mut stream: &TcpStream) -> Result<Response, ()> {
