@@ -33,6 +33,7 @@ impl Response {
         !check_sum
     }
 }
+
 pub struct TCP_Segment {
     pub src_port: u32,
     pub des_port: u32,

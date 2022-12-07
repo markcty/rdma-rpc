@@ -1,6 +1,6 @@
 use colored::Colorize;
 
-pub fn color_log_test(action: &str) {
+pub fn _color_log_test(action: &str) {
     println!("[client]{}", action);
     println!(
         "{}, {}, {}, {}, {}, {}, and some normal text.",
