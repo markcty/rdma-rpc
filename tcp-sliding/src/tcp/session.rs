@@ -29,25 +29,16 @@ impl Session {
             let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
             let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
             println!("down = {}, up = {}", down_bound, up_bound);
-            let send_msg = Message {
-                id: idx,
-                content: data[down_bound..up_bound]
-                    .try_into()
-                    .expect("slice with incorrect length"),
-            };
-            println!("assemble msg = {:?}", send_msg);
-
-            match message_send(&self.stream, send_msg) {
-                Ok(num) => {
-                    send_count += num;
-                }
-                Err(_) => {
-                    return Err(());
-                }
-            }
+            let content = data[down_bound..up_bound]
+                .try_into()
+                .expect("slice with incorrect length");
+            let send_msg = Message::new(idx, 0, content);
+            println!("[client] [assemble] msg = {:?}", send_msg);
+            let send_num = message_send(&self.stream, send_msg)?;
+            send_count += send_num;
             let get_resp = wait_response(&self.stream).unwrap();
             println!("[client][get] {:?}", get_resp);
-            if get_resp.ack != send_msg.id {
+            if get_resp.ack != send_msg.seq_num {
                 continue;
             }
             idx += 1;

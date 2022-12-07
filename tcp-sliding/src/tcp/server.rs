@@ -17,12 +17,19 @@ fn handle_client(mut stream: TcpStream) {
             // echo everything!
             let get_message = unsafe { deserialize_message(&data) };
             println!("[server][get] => {:?}", get_message);
-            let resp = Response {
-                ack: get_message.id,
-            };
-            let reply_data = unsafe { serialize_any(&resp) };
-            std::thread::sleep(Duration::from_secs(1));
-            stream.write(&reply_data).unwrap();
+            if !get_message.check_checksum() {
+                let resp = Response { ack: 0u32 };
+                let reply_data = unsafe { serialize_any(&resp) };
+                std::thread::sleep(Duration::from_secs(1));
+                stream.write(&reply_data).unwrap();
+            } else {
+                let resp = Response {
+                    ack: get_message.seq_num,
+                };
+                let reply_data = unsafe { serialize_any(&resp) };
+                std::thread::sleep(Duration::from_secs(1));
+                stream.write(&reply_data).unwrap();
+            }
             true
         }
         Err(_) => {
