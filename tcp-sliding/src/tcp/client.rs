@@ -59,14 +59,16 @@ pub struct Row {
 pub fn client_send_test() {
     let mut stream = TcpStream::connect(LOCAL_HOST).expect("connect failed");
     let send_mode = SendCase::Normal;
-    for i in 0..1 {
+    let mut idx = 0;
+    let length = 10;
+    while idx < length {
         // let row = Response { ack: 1 };
         let msg_str = Message {
-            id: i as u32,
+            id: idx as u32,
             context: [1; 16],
         };
         let msg = unsafe { serialize_any(&msg_str) };
-        println!("msg = {:?}, len = {:?}", msg, msg.len());
+        println!("[client][send] [id = {:?}], [len = {:?}]", idx, msg.len());
         down_stream_send(&stream, msg, &send_mode);
         // stream.write(msg).unwrap();
 
@@ -74,19 +76,15 @@ pub fn client_send_test() {
         match stream.read(&mut data) {
             Ok(_) => {
                 let get_resp = unsafe { deserialize_response(&data) };
-                println!("{:?}", get_resp);
+                println!("[client][get] {:?}", get_resp);
+                if get_resp.ack != msg_str.id {
+                    continue;
+                }
             }
             Err(e) => {
                 println!("Failed to receive data: {}", e);
             }
         }
-        // match stream.read_exact(&mut data) {
-        //     Ok(_) => {
-        //         println!("{:?}", String::from_utf8((&data).to_vec()).unwrap());
-        //     }
-        //     Err(e) => {
-        //         println!("Failed to receive data: {}", e);
-        //     }
-        // }
+        idx += 1;
     }
 }

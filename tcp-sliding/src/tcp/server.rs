@@ -15,12 +15,7 @@ fn handle_client(mut stream: TcpStream) {
         Ok(size) => {
             // echo everything!
             let get_message = unsafe { deserialize_message(&data) };
-            println!(
-                "server get =>\n{:?}, len = {:?}\ndeserialize get =>\n{:?}\n",
-                data,
-                data.len(),
-                get_message
-            );
+            println!("[server][get] => {:?}", get_message);
             let resp = Response {
                 ack: get_message.id,
             };
