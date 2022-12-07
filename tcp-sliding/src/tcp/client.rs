@@ -1,9 +1,10 @@
 use crate::config::LOCAL_HOST;
 use crate::tcp::types::*;
-use std::io;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::str::from_utf8;
+
+use super::session::Session;
 
 pub fn run_client() {
     match TcpStream::connect(LOCAL_HOST) {
@@ -57,6 +58,11 @@ pub struct Row {
     email: [u8; 255],
 }
 pub fn client_send_test() {
+    let session = Session::new(LOCAL_HOST);
+    let test_data = &[1u8; 100];
+    println!("test data = {:?}", test_data);
+    session.send(test_data);
+    return;
     let mut stream = TcpStream::connect(LOCAL_HOST).expect("connect failed");
     let send_mode = SendCase::Normal;
     let mut idx = 0;
@@ -65,7 +71,7 @@ pub fn client_send_test() {
         // let row = Response { ack: 1 };
         let msg_str = Message {
             id: idx as u32,
-            context: [1; 16],
+            content: [1; MESSAGE_CONTENT_SIZE],
         };
         let msg = unsafe { serialize_any(&msg_str) };
         println!("[client][send] [id = {:?}], [len = {:?}]", idx, msg.len());
