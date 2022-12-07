@@ -12,6 +12,7 @@ pub const IP6_DAD_RETRIES: usize = 3;
 pub const IP6_DAD_DELAY: u64 = 500;
 
 pub const FRAME_CONTENT_MAX_LEN: usize = 2048;
+pub const MAX_BUFF: usize = 128;
 
 pub enum SendCase {
     Normal,

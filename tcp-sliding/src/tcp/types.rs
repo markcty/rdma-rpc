@@ -5,7 +5,33 @@ pub const MESSAGE_SIZE: usize = 16;
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 pub struct Response {
-    pub ack: u32,
+    pub seq_num: u32,
+    pub ack_num: u32,
+    pub check_sum: u32,
+}
+impl Response {
+    pub fn new(seq_num: u32, ack_num: u32) -> Response {
+        let mut ret_resp = Response {
+            seq_num,
+            ack_num,
+            check_sum: 0u32,
+        };
+        ret_resp.set_checksum();
+        ret_resp
+    }
+    pub fn set_checksum(&mut self) {
+        self.check_sum = self.gen_checksum()
+    }
+    pub fn check_checksum(&self) -> bool {
+        self.check_sum == self.gen_checksum()
+    }
+    pub fn gen_checksum(&self) -> u32 {
+        let mut check_sum = 0u32;
+        check_sum += self.seq_num;
+        check_sum += self.ack_num;
+        check_sum = (check_sum >> 16) + check_sum & 0xFF_FF;
+        !check_sum
+    }
 }
 pub struct TCP_Segment {
     pub src_port: u32,

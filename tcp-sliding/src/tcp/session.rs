@@ -1,5 +1,5 @@
 use crate::config::SendCase;
-use crate::config::{FRAME_CONTENT_MAX_LEN, SEND_CASE};
+use crate::config::{FRAME_CONTENT_MAX_LEN, MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -36,9 +36,9 @@ impl Session {
             println!("[client] [assemble] msg = {:?}", send_msg);
             let send_num = message_send(&self.stream, send_msg)?;
             send_count += send_num;
-            let get_resp = wait_response(&self.stream).unwrap();
+            let get_resp = wait_response(&self.stream)?;
             println!("[client][get] {:?}", get_resp);
-            if get_resp.ack != send_msg.seq_num {
+            if get_resp.ack_num != send_msg.seq_num {
                 continue;
             }
             idx += 1;
@@ -58,10 +58,14 @@ fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
     }
 }
 fn wait_response(mut stream: &TcpStream) -> Result<Response, ()> {
-    let mut data = [0 as u8; RESPONSE_SIZE];
+    let mut data = [0 as u8; MAX_BUFF];
     match stream.read(&mut data) {
         Ok(_) => {
             let get_resp = unsafe { deserialize_response(&data) };
+            if !get_resp.check_checksum() {
+                println!(" error get resp = {:?}", get_resp);
+                return Err(());
+            }
             Ok(get_resp)
         }
         Err(_) => Err(()),
