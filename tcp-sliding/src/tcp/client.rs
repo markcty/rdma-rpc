@@ -1,5 +1,5 @@
 use crate::config::LOCAL_HOST;
-use crate::tcp::types::{deserialize_row, serialize_row, Response};
+use crate::tcp::types::*;
 use std::io;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -36,44 +36,57 @@ pub fn run_client() {
     }
     println!("Terminated.");
 }
+pub enum SendCase {
+    Normal,
+    MayLoss,
+    MayOverTime,
+}
+pub fn down_stream_send(mut stream: &TcpStream, context: &[u8], mode: &SendCase) {
+    match mode {
+        SendCase::Normal => {
+            stream.write(context).unwrap();
+        }
+        SendCase::MayLoss => {}
+        SendCase::MayOverTime => {}
+    };
+}
+pub struct Frame {}
+pub struct Row {
+    id: u32,
+    username: [u8; 32],
+    email: [u8; 255],
+}
 pub fn client_send_test() {
     let mut stream = TcpStream::connect(LOCAL_HOST).expect("connect failed");
-
-    for _ in 0..10 {
+    let send_mode = SendCase::Normal;
+    for i in 0..1 {
         // let row = Response { ack: 1 };
-        // let msg = serialize_row(&row);
-        let msg: &[u8; 8] = &[0, 0, 0, 4, 5, 6, 7, 8];
+        let msg_str = Message {
+            id: i as u32,
+            context: [1; 16],
+        };
+        let msg = unsafe { serialize_any(&msg_str) };
+        println!("msg = {:?}, len = {:?}", msg, msg.len());
+        down_stream_send(&stream, msg, &send_mode);
+        // stream.write(msg).unwrap();
 
-        stream.write(msg).unwrap();
-        println!("Sent Hello, awaiting reply...");
-
-        let mut data = [0 as u8; 4]; // using 6 byte buffer
-        match stream.read_exact(&mut data) {
+        let mut data = [0 as u8; RESPONSE_SIZE]; // using 6 byte buffer
+        match stream.read(&mut data) {
             Ok(_) => {
-                println!("{:?}", String::from_utf8((&data).to_vec()).unwrap());
-
-                // let bar = data.clone();
-                let back_to_u32: u32 = u32::from_be_bytes(data);
-                println!("{}", back_to_u32);
-                // let get: u32 = data.try_into().unwrap();
-                // if &data == msg {
-                // println!("Reply is ok!");
-                // } else {
-                // let text = from_utf8(&data).unwrap();
-                // println!("Unexpected reply: {}", text);
-                // }
+                let get_resp = unsafe { deserialize_response(&data) };
+                println!("{:?}", get_resp);
             }
             Err(e) => {
                 println!("Failed to receive data: {}", e);
             }
         }
-        match stream.read_exact(&mut data) {
-            Ok(_) => {
-                println!("{:?}", String::from_utf8((&data).to_vec()).unwrap());
-            }
-            Err(e) => {
-                println!("Failed to receive data: {}", e);
-            }
-        }
+        // match stream.read_exact(&mut data) {
+        //     Ok(_) => {
+        //         println!("{:?}", String::from_utf8((&data).to_vec()).unwrap());
+        //     }
+        //     Err(e) => {
+        //         println!("Failed to receive data: {}", e);
+        //     }
+        // }
     }
 }

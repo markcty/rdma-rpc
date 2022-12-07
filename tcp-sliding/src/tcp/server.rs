@@ -1,8 +1,8 @@
+use crate::config::LOCAL_HOST;
+use crate::tcp::types::*;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
-
-use crate::config::{LOCAL_HOST};
 pub fn run_server_background() {
     thread::spawn(|| {
         tcp_listener();
@@ -10,11 +10,22 @@ pub fn run_server_background() {
 }
 
 fn handle_client(mut stream: TcpStream) {
-    let mut data = [0 as u8; 50]; // using 50 byte buffer
+    let mut data = [0 as u8; MESSAGE_SIZE]; // using 50 byte buffer
     while match stream.read(&mut data) {
         Ok(size) => {
             // echo everything!
-            stream.write(&data[0..size]).unwrap();
+            let get_message = unsafe { deserialize_message(&data) };
+            println!(
+                "server get =>\n{:?}, len = {:?}\ndeserialize get =>\n{:?}\n",
+                data,
+                data.len(),
+                get_message
+            );
+            let resp = Response {
+                ack: get_message.id,
+            };
+            let reply_data = unsafe { serialize_any(&resp) };
+            stream.write(&reply_data).unwrap();
             true
         }
         Err(_) => {
@@ -31,7 +42,7 @@ fn handle_client(mut stream: TcpStream) {
 fn tcp_listener() {
     let listener = TcpListener::bind(LOCAL_HOST).unwrap();
     // accept connections and process them, spawning a new thread for each one
-    println!("Server listening on {}\n",LOCAL_HOST);
+    println!("Server listening on {}\n", LOCAL_HOST);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
