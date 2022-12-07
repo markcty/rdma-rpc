@@ -1,10 +1,10 @@
+use super::types::{serialize_any, Response, RESPONSE_SIZE};
 use crate::config::SendCase;
 use crate::config::{FRAME_CONTENT_MAX_LEN, MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
+use crate::tcp::utils::client_prefix;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-
-use super::types::{serialize_any, Response, RESPONSE_SIZE};
 pub struct Session {
     pub stream: TcpStream,
     pub send_case: SendCase,
@@ -33,11 +33,11 @@ impl Session {
                 .try_into()
                 .expect("slice with incorrect length");
             let send_msg = Message::new(idx, 0, content);
-            println!("[client] [assemble] msg = {:?}", send_msg);
+            println!("{} msg = {:?}", client_prefix("assemble"), send_msg);
             let send_num = message_send(&self.stream, send_msg)?;
             send_count += send_num;
             let get_resp = wait_response(&self.stream)?;
-            println!("[client][get] {:?}", get_resp);
+            println!("{} {:?}", client_prefix("get"), get_resp);
             if get_resp.ack_num != send_msg.seq_num {
                 continue;
             }

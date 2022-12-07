@@ -1,5 +1,6 @@
 use crate::config::{LOCAL_HOST, MAX_BUFF};
 use crate::tcp::types::*;
+use crate::tcp::utils::server_prefix;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
@@ -16,20 +17,20 @@ fn handle_client(mut stream: TcpStream) {
         Ok(size) => {
             // echo everything!
             let get_message = unsafe { deserialize_message(&data) };
-            println!("[server][get] => {:?}", get_message);
+            println!("{} => {:?}", server_prefix("get"), get_message);
             if !get_message.check_checksum() {
-                println!("[server] checksum error");
+                println!("{}", server_prefix("checksum error"));
                 let resp = Response::new(0, 0);
                 let reply_data = unsafe { serialize_any(&resp) };
                 std::thread::sleep(Duration::from_secs(1));
                 stream.write(&reply_data).unwrap();
             } else {
-                println!("[server] checksum work");
+                println!("{}", server_prefix("checksum OK"));
                 // let resp = Message::new(get_message.seq_num, get_message.ack_num);
                 let resp = Response::new(0, get_message.seq_num);
                 let reply_data = unsafe { serialize_any(&resp) };
                 std::thread::sleep(Duration::from_secs(1));
-                print!("[server] resp = {:?}", resp);
+                println!("{} = {:?}", server_prefix("resp"), resp);
                 stream.write(&reply_data).unwrap();
             }
             true
