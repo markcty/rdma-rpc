@@ -1,13 +1,13 @@
-use tokio::net::tcp;
-use tokio::stream;
-
 use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
-use crate::config::{SendCase, CONNECT_PASSWORD};
+use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK};
 use crate::config::{MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use crate::tcp::utils::{client_prefix, server_prefix};
 use std::io::{Read, Write};
+
 use std::net::TcpStream;
+use std::thread;
+use std::time::Duration;
 pub struct Session {
     pub stream: TcpStream,
     pub send_case: SendCase,
@@ -52,6 +52,9 @@ impl Session {
             }
             idx += 1;
         }
+        let end_msg = Message::new(0, END_ACK, [0u8; MESSAGE_CONTENT_SIZE]);
+        message_send(&self.stream, end_msg).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
         Ok(send_count)
     }
 }
