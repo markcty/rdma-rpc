@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 pub const ND_CACHE__INCOMPLETE_RETRY_TIME: u64 = 1;
 pub const ND_CACHE__INCOMPLETE_RETRY_LIMIT: usize = 2;
 pub const ND_CACHE__REACHABLE_TIME: u64 = 45;
@@ -17,11 +19,15 @@ pub const CONNECT_PASSWORD: u32 = 99;
 pub const END_ACK: u32 = 40;
 pub const MAX_MSG_SIZE: usize = 512;
 pub const WINDOW_SIZE: usize = 4;
+pub const TIME_OUT: Duration = Duration::from_secs(5);
 
 pub enum SendCase {
     Normal,
     MayLoss,
     MayOverTime,
+    MustLoss,
 }
-pub const SEND_CASE: SendCase = SendCase::Normal;
-// pub const SEND_CASE: SendCase = SendCase::MayLoss;
+pub const LOSS_RATE: usize = 20;
+// pub const SEND_CASE: SendCase = SendCase::Normal;
+// pub const SEND_CASE: SendCase = SendCase::MustLoss;
+pub const SEND_CASE: SendCase = SendCase::MayLoss;

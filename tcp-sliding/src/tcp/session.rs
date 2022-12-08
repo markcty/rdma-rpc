@@ -1,11 +1,13 @@
 use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
-use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK};
+use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK, LOSS_RATE, TIME_OUT};
 use crate::config::{MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use crate::tcp::utils::{client_prefix, server_prefix};
 use bytes::{BufMut, BytesMut};
 use rand::Rng;
+use std::cmp::Ordering;
 use std::io::{Read, Write};
+use tokio::time::{self, Instant};
 
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
@@ -55,9 +57,10 @@ pub fn send_data(stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
     //     if stream.re
     // }
     let mut ack_flag = true;
-    let mut last_seq_num = 0;
+    let mut start_time = Instant::now();
     while idx < msg_total_num as u32 {
         if ack_flag {
+            start_time = Instant::now();
             let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
             let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
             println!("down = {}, up = {}", down_bound, up_bound);
@@ -67,11 +70,16 @@ pub fn send_data(stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
             let send_msg = Message::new(idx, 0, content);
             println!("{} msg = {:?}", client_prefix("assemble"), send_msg);
             let send_num = message_send(stream, send_msg).unwrap();
-            last_seq_num = send_msg.seq_num;
             send_count += send_num;
             ack_flag = false;
         } else {
             // let get_resp = read_response_short_time(stream).unwrap();
+            let duration = start_time.elapsed();
+            if duration.cmp(&TIME_OUT) == Ordering::Greater {
+                println!("{}", client_prefix("loss package"));
+                ack_flag = true;
+                continue;
+            }
             match read_response_short_time(stream) {
                 Ok(get_resp) => {
                     println!("{} {:?}", client_prefix("get"), get_resp);
@@ -91,20 +99,29 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
     stream.set_read_timeout(None).unwrap();
     let mut cur_data = [0u8; MAX_BUFF];
     let mut data_count = 0;
+    let mut looking_for_seq = 0;
     while match stream.read(&mut cur_data) {
         Ok(_size) => {
             // echo everything!
             let get_message = read_message_from_data(cur_data).unwrap();
-            println!("{} => {:?}", server_prefix("get"), get_message);
+            println!(
+                "{} => {:?} looking for {}",
+                server_prefix("get"),
+                get_message,
+                looking_for_seq
+            );
             if get_message.ack_num == END_ACK {
                 println!("get end ack");
                 return Ok(data_count);
             }
-            let resp = Response::new(0, get_message.seq_num);
-            data.put(&get_message.content[..]);
-            std::thread::sleep(Duration::from_secs(1));
-            data_count += MESSAGE_CONTENT_SIZE;
-            response_send(stream, resp).unwrap();
+            if get_message.seq_num == looking_for_seq {
+                data.put(&get_message.content[..]);
+                looking_for_seq += 1;
+                data_count += MESSAGE_CONTENT_SIZE;
+                std::thread::sleep(Duration::from_secs(1));
+                let resp = Response::new(0, get_message.seq_num);
+                response_send(stream, resp).unwrap();
+            }
             true
         }
         Err(_) => {
@@ -113,7 +130,7 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
                 stream.peer_addr().unwrap()
             );
             stream.shutdown(Shutdown::Both).unwrap();
-            return Err(());
+            false
         }
     } {}
     Ok(data_count)
@@ -124,13 +141,14 @@ pub fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
         SendCase::Normal => real_send(stream, msg_serial),
         SendCase::MayLoss => {
             let mut rng = rand::thread_rng();
-            if rng.gen_range(0..100) < 10 {
+            if rng.gen_range(0..100) > LOSS_RATE {
                 real_send(stream, msg_serial)
             } else {
                 Ok(0)
             }
         }
         SendCase::MayOverTime => Ok(0),
+        _ => Ok(0),
     }
 }
 pub fn response_send(mut stream: &TcpStream, response: Response) -> Result<usize, ()> {
@@ -139,13 +157,14 @@ pub fn response_send(mut stream: &TcpStream, response: Response) -> Result<usize
         SendCase::Normal => real_send(stream, msg_serial),
         SendCase::MayLoss => {
             let mut rng = rand::thread_rng();
-            if rng.gen_range(0..100) < 10 {
+            if rng.gen_range(0..100) > LOSS_RATE {
                 real_send(stream, msg_serial)
             } else {
                 Ok(0)
             }
         }
         SendCase::MayOverTime => Ok(0),
+        SendCase::MustLoss => Ok(0),
     }
 }
 pub fn real_send(mut stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
@@ -187,7 +206,7 @@ pub fn read_response_short_time(mut stream: &TcpStream) -> Result<Response, ()> 
                 println!("{} = {:?}", client_prefix("error get resp"), get_resp);
                 return Err(());
             }
-            println!("{}", client_prefix("checksum OK"));
+            println!("{} {:?}", client_prefix("checksum OK"), get_resp);
             Ok(get_resp)
         }
         Err(_) => Err(()),
