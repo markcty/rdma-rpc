@@ -41,7 +41,7 @@ pub fn run_client() {
     println!("Terminated.");
 }
 pub fn client_send_test() {
-    let mut session = Session::new(LOCAL_HOST).expect("session connect failed");
+    let session = Session::new(LOCAL_HOST).expect("session connect failed");
     let test_data = &[1u8; 8];
     println!("test data = {:?}", test_data);
     let send_res = session.send(test_data).unwrap();

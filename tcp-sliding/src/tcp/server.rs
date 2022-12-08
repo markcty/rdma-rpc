@@ -1,31 +1,40 @@
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 
 use crate::config::{END_ACK, LOCAL_HOST, MAX_BUFF, MAX_MSG_SIZE};
 use crate::tcp::session::{message_send, read_message_from_data, response_send};
 use crate::tcp::types::*;
 use crate::tcp::utils::server_prefix;
 use std::io::{Read, Write};
-use std::isize::MAX;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 
-use super::session::{self, read_message, Session};
+use super::session::Session;
 pub fn run_server_background() {
     thread::spawn(|| {
         tcp_listener();
     });
 }
+fn local_fun_call(data: &mut BytesMut) -> Result<&mut BytesMut, ()> {
+    std::thread::sleep(Duration::from_secs(2));
+    // echo server
+    Ok(data)
+}
+fn reply_error() {}
 fn handle_client(mut stream: TcpStream) {
-    let mut session = Session::server_build_session(stream);
+    let session = Session::server_build_session(stream);
     let mut request_data = BytesMut::with_capacity(MAX_MSG_SIZE);
     session.receive(&mut request_data).unwrap();
     println!("received data = {:?}", &request_data[..]);
-    std::thread::sleep(Duration::from_secs(2));
-    session.sendM(&request_data);
-    
+
+    match local_fun_call(&mut request_data) {
+        Ok(response_data) => {
+            session.sendBytesMute(&response_data).unwrap();
+        }
+        Err(_) => reply_error(),
+    }
 }
-fn handle_clientv(mut stream: TcpStream, mut request_data: &[u8]) {
+fn handle_client_old_version(mut stream: TcpStream, mut request_data: &[u8]) {
     request_data = &[9u8; MAX_BUFF];
     let mut data = [0 as u8; MAX_BUFF]; // using 50 byte buffer
     while match stream.read(&mut data) {
