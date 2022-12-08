@@ -24,3 +24,4 @@ pub enum SendCase {
     MayOverTime,
 }
 pub const SEND_CASE: SendCase = SendCase::Normal;
+// pub const SEND_CASE: SendCase = SendCase::MayLoss;

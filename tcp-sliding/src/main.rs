@@ -3,11 +3,12 @@ mod libs;
 mod tcp;
 use crate::tcp::types::serialize_any;
 use bytes::{BufMut, BytesMut};
+use crossbeam::channel::bounded;
 use std::thread;
 use std::time;
+use std::time::Duration;
 use tcp::client;
 use tcp::server;
-
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 struct Row {
@@ -65,9 +66,23 @@ fn server_client_test() {
     client::client_send_test();
 }
 
+fn lock_test() {
+    let (s, r) = bounded(1);
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(3)); //假设线程使用了3秒
+        s.send(()).unwrap();
+    });
+    //2秒超时
+    if let Ok(msg) = r.recv_timeout(Duration::from_secs(2)) {
+        println!("Hello, world!, got msg = {:?}", msg);
+    } else {
+        println!("Time out");
+    };
+}
 fn main() {
     println!("hello world");
-    server_client_test();
+    lock_test();
+    // server_client_test();
     // ser_test();
     // bytemute_test();
 }

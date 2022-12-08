@@ -1,10 +1,10 @@
-use bytes::{BufMut, BytesMut};
-
 use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
 use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK};
 use crate::config::{MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use crate::tcp::utils::{client_prefix, server_prefix};
+use bytes::{BufMut, BytesMut};
+use rand::Rng;
 use std::io::{Read, Write};
 
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -47,6 +47,11 @@ pub fn send_data(stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
     println!("message size = {}", msg_total_num);
     let mut send_count: usize = 0;
     let mut idx: u32 = 0;
+    let mut sending_idx = 0;
+    let mut waiting_idx = 0;
+    // while sending_idx < msg_total_num{
+    //     if stream.re
+    // }
     while idx < msg_total_num as u32 {
         let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
         let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
@@ -103,23 +108,37 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
 pub fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
     let msg_serial = unsafe { serialize_any(&msg) };
     match SEND_CASE {
-        SendCase::Normal => match stream.write(msg_serial) {
-            Ok(num) => Ok(num),
-            Err(_) => Err(()),
-        },
-        SendCase::MayLoss => Ok(0),
+        SendCase::Normal => real_send(stream, msg_serial),
+        SendCase::MayLoss => {
+            let mut rng = rand::thread_rng();
+            if rng.gen_range(0..100) < 10 {
+                real_send(stream, msg_serial)
+            } else {
+                Ok(0)
+            }
+        }
         SendCase::MayOverTime => Ok(0),
     }
 }
 pub fn response_send(mut stream: &TcpStream, response: Response) -> Result<usize, ()> {
     let msg_serial = unsafe { serialize_any(&response) };
     match SEND_CASE {
-        SendCase::Normal => match stream.write(msg_serial) {
-            Ok(num) => Ok(num),
-            Err(_) => Err(()),
-        },
-        SendCase::MayLoss => Ok(0),
+        SendCase::Normal => real_send(stream, msg_serial),
+        SendCase::MayLoss => {
+            let mut rng = rand::thread_rng();
+            if rng.gen_range(0..100) < 10 {
+                real_send(stream, msg_serial)
+            } else {
+                Ok(0)
+            }
+        }
         SendCase::MayOverTime => Ok(0),
+    }
+}
+pub fn real_send(mut stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
+    match stream.write(data) {
+        Ok(num) => Ok(num),
+        Err(_) => Err(()),
     }
 }
 pub fn read_message_from_data(data: [u8; MAX_BUFF]) -> Result<Message, ()> {
