@@ -45,30 +45,42 @@ impl Session {
 pub fn send_data(stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
     let msg_total_num = (data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE;
     println!("message size = {}", msg_total_num);
+    stream
+        .set_read_timeout(Some(Duration::from_micros(10)))
+        .unwrap();
+
     let mut send_count: usize = 0;
     let mut idx: u32 = 0;
-    let mut sending_idx = 0;
-    let mut waiting_idx = 0;
     // while sending_idx < msg_total_num{
     //     if stream.re
     // }
+    let mut ack_flag = true;
+    let mut last_seq_num = 0;
     while idx < msg_total_num as u32 {
-        let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
-        let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
-        println!("down = {}, up = {}", down_bound, up_bound);
-        let content = data[down_bound..up_bound]
-            .try_into()
-            .expect("slice with incorrect length");
-        let send_msg = Message::new(idx, 0, content);
-        println!("{} msg = {:?}", client_prefix("assemble"), send_msg);
-        let send_num = message_send(stream, send_msg).unwrap();
-        send_count += send_num;
-        let get_resp = read_response(stream).unwrap();
-        println!("{} {:?}", client_prefix("get"), get_resp);
-        if get_resp.ack_num != send_msg.seq_num {
-            continue;
+        if ack_flag {
+            let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
+            let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
+            println!("down = {}, up = {}", down_bound, up_bound);
+            let content = data[down_bound..up_bound]
+                .try_into()
+                .expect("slice with incorrect length");
+            let send_msg = Message::new(idx, 0, content);
+            println!("{} msg = {:?}", client_prefix("assemble"), send_msg);
+            let send_num = message_send(stream, send_msg).unwrap();
+            last_seq_num = send_msg.seq_num;
+            send_count += send_num;
+            ack_flag = false;
+        } else {
+            // let get_resp = read_response_short_time(stream).unwrap();
+            match read_response_short_time(stream) {
+                Ok(get_resp) => {
+                    println!("{} {:?}", client_prefix("get"), get_resp);
+                    idx += 1;
+                    ack_flag = true;
+                }
+                Err(_) => {}
+            };
         }
-        idx += 1;
     }
     let end_msg = Message::new(0, END_ACK, [0u8; MESSAGE_CONTENT_SIZE]);
     message_send(stream, end_msg).unwrap();
@@ -76,6 +88,7 @@ pub fn send_data(stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
     Ok(send_count)
 }
 pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize, ()> {
+    stream.set_read_timeout(None).unwrap();
     let mut cur_data = [0u8; MAX_BUFF];
     let mut data_count = 0;
     while match stream.read(&mut cur_data) {
@@ -149,6 +162,38 @@ pub fn read_message_from_data(data: [u8; MAX_BUFF]) -> Result<Message, ()> {
     }
     Ok(get_msg)
 }
+
+pub fn read_response_n(mut stream: &TcpStream) -> Result<Response, ()> {
+    let mut data = [0 as u8; MAX_BUFF];
+    match stream.read(&mut data) {
+        Ok(_) => {
+            let get_resp = unsafe { deserialize_response(&data) };
+            if !get_resp.check_checksum() {
+                println!("{} = {:?}", client_prefix("error get resp"), get_resp);
+                return Err(());
+            }
+            println!("{}", client_prefix("checksum OK"));
+            Ok(get_resp)
+        }
+        Err(_) => Err(()),
+    }
+}
+pub fn read_response_short_time(mut stream: &TcpStream) -> Result<Response, ()> {
+    let mut data = [0 as u8; MAX_BUFF];
+    match stream.read(&mut data) {
+        Ok(_) => {
+            let get_resp = unsafe { deserialize_response(&data) };
+            if !get_resp.check_checksum() {
+                println!("{} = {:?}", client_prefix("error get resp"), get_resp);
+                return Err(());
+            }
+            println!("{}", client_prefix("checksum OK"));
+            Ok(get_resp)
+        }
+        Err(_) => Err(()),
+    }
+}
+
 pub fn read_response(mut stream: &TcpStream) -> Result<Response, ()> {
     let mut data = [0 as u8; MAX_BUFF];
     match stream.read(&mut data) {

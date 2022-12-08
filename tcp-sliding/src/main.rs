@@ -81,8 +81,8 @@ fn lock_test() {
 }
 fn main() {
     println!("hello world");
-    lock_test();
-    // server_client_test();
+    // lock_test();
+    server_client_test();
     // ser_test();
     // bytemute_test();
 }
