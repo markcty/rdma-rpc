@@ -1,19 +1,17 @@
-use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
-use crate::config::{
-    SendCase, CONNECT_PASSWORD, END_ACK, LOSS_RATE, SIZE_ACK, TIME_OUT, WINDOW_SIZE,
-};
+use super::types::{deserialize_message, serialize_any, Response};
+use crate::config::{SendCase, END_ACK, LOSS_RATE, SIZE_ACK, TIME_OUT, WINDOW_SIZE};
 use crate::config::{MAX_BUFF, SEND_CASE};
-use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
+use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE};
 use crate::tcp::utils::*;
 use crate::tcp::utils::{client_prefix, server_prefix};
-use bytes::{buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use rand::Rng;
 use std::cmp::Ordering;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, TcpStream};
 use std::thread;
 use std::time::Duration;
-use tokio::time::{self, Instant};
+use tokio::time::Instant;
 pub struct Session {
     pub stream: TcpStream,
     pub send_case: SendCase,
@@ -165,7 +163,7 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
     let mut cur_window_size: u32 = WINDOW_SIZE as u32;
     let mut cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
     let mut buffer_left = WINDOW_SIZE;
-    let mut total_size: u32 = WINDOW_SIZE as u32;
+    let mut _total_size: u32 = WINDOW_SIZE as u32;
     while match stream.read(&mut cur_data) {
         Ok(_size) => {
             // echo everything!
@@ -179,13 +177,13 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
             );
             match get_message.ack_num {
                 SIZE_ACK => {
-                    total_size = build_u32_from_u8(&get_message.content[..]).unwrap();
-                    if total_size < cur_window_size {
+                    _total_size = build_u32_from_u8(&get_message.content[..]).unwrap();
+                    if _total_size < cur_window_size {
                         // already get all in the first window
-                        if buffer_left as u32 + total_size == cur_window_size {
-                            data.put(&cur_buffer[0..total_size as usize * MESSAGE_CONTENT_SIZE]);
+                        if buffer_left as u32 + _total_size == cur_window_size {
+                            data.put(&cur_buffer[0.._total_size as usize * MESSAGE_CONTENT_SIZE]);
                         }
-                        cur_window_size = total_size;
+                        cur_window_size = _total_size;
                     }
                     let resp = Response::new(0, SIZE_ACK);
                     response_send(stream, resp).unwrap();
@@ -241,7 +239,7 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
     } {}
     Ok(data_count)
 }
-pub fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
+pub fn message_send(stream: &TcpStream, msg: Message) -> Result<usize, ()> {
     let msg_serial = unsafe { serialize_any(&msg) };
     match SEND_CASE {
         SendCase::Normal => real_send(stream, msg_serial),
@@ -257,7 +255,7 @@ pub fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
         _ => Ok(0),
     }
 }
-pub fn response_send(mut stream: &TcpStream, response: Response) -> Result<usize, ()> {
+pub fn response_send(stream: &TcpStream, response: Response) -> Result<usize, ()> {
     let msg_serial = unsafe { serialize_any(&response) };
     match SEND_CASE {
         SendCase::Normal => real_send(stream, msg_serial),
