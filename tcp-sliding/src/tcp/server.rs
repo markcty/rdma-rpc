@@ -1,3 +1,5 @@
+use bytes::BytesMut;
+
 use crate::config::{END_ACK, LOCAL_HOST, MAX_BUFF, MAX_MSG_SIZE};
 use crate::tcp::session::{message_send, read_message_from_data, response_send};
 use crate::tcp::types::*;
@@ -14,12 +16,16 @@ pub fn run_server_background() {
         tcp_listener();
     });
 }
-fn handle_clientv(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream) {
     let mut session = Session::server_build_session(stream);
-    let mut request_data = &[0u8; MAX_MSG_SIZE];
-    session.receive(request_data).unwrap();
+    let mut request_data = BytesMut::with_capacity(MAX_MSG_SIZE);
+    session.receive(&mut request_data).unwrap();
+    println!("received data = {:?}", &request_data[..]);
+    std::thread::sleep(Duration::from_secs(2));
+    session.sendM(&request_data);
+    
 }
-fn handle_client(mut stream: TcpStream, mut request_data: &[u8]) {
+fn handle_clientv(mut stream: TcpStream, mut request_data: &[u8]) {
     request_data = &[9u8; MAX_BUFF];
     let mut data = [0 as u8; MAX_BUFF]; // using 50 byte buffer
     while match stream.read(&mut data) {
@@ -56,9 +62,10 @@ fn tcp_listener() {
                 println!("New connection: {}", stream.peer_addr().unwrap());
                 thread::spawn(move || {
                     // connection succeeded
-                    let mut request_data = &[0u8; MAX_BUFF];
-                    handle_client(stream, request_data);
-                    println!("{} {:?}", server_prefix("request_get"), request_data);
+                    // let mut request_data = &[0u8; MAX_BUFF];
+                    // handle_client(stream, request_data);
+                    // println!("{} {:?}", server_prefix("request_get"), request_data);
+                    handle_client(stream);
                 });
             }
             Err(e) => {

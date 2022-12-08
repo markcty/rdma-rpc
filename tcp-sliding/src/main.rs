@@ -67,7 +67,7 @@ fn server_client_test() {
 
 fn main() {
     println!("hello world");
-    // server_client_test();
+    server_client_test();
     // ser_test();
-    bytemute_test();
+    // bytemute_test();
 }

@@ -1,3 +1,5 @@
+use bytes::{BufMut, BytesMut};
+
 use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
 use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK};
 use crate::config::{MAX_BUFF, SEND_CASE};
@@ -29,7 +31,10 @@ impl Session {
             send_case: SendCase::Normal,
         }
     }
-    pub fn receive(mut self, mut data: &[u8]) -> Result<usize, ()> {
+    pub fn receive(&self, data: &mut BytesMut) -> Result<usize, ()> {
+        receive_data(&self.stream, data)
+    }
+    pub fn receivev(mut self, data: &mut BytesMut) -> Result<usize, ()> {
         let mut cur_data = [0u8; MAX_BUFF];
         let mut data_count = 0;
         while match self.stream.read(&mut cur_data) {
@@ -42,6 +47,7 @@ impl Session {
                     return Ok(data_count);
                 }
                 let resp = Response::new(0, get_message.seq_num);
+                data.put(&get_message.content[..]);
                 std::thread::sleep(Duration::from_secs(1));
                 data_count += MESSAGE_CONTENT_SIZE;
                 response_send(&self.stream, resp).unwrap();
@@ -58,7 +64,10 @@ impl Session {
         } {}
         Ok(data_count)
     }
-    pub fn send(self, data: &[u8]) -> Result<usize, ()> {
+    pub fn sendM(&self, data: &BytesMut) -> Result<usize, ()> {
+        self.send(&data[..])
+    }
+    pub fn send(&self, data: &[u8]) -> Result<usize, ()> {
         let msg_total_num = (data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE;
         println!("message size = {}", msg_total_num);
         let mut send_count: usize = 0;
@@ -86,6 +95,37 @@ impl Session {
         std::thread::sleep(Duration::from_secs(1));
         Ok(send_count)
     }
+}
+
+pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize, ()> {
+    let mut cur_data = [0u8; MAX_BUFF];
+    let mut data_count = 0;
+    while match stream.read(&mut cur_data) {
+        Ok(_size) => {
+            // echo everything!
+            let get_message = read_message_from_data(cur_data).unwrap();
+            println!("{} => {:?}", server_prefix("get"), get_message);
+            if get_message.ack_num == END_ACK {
+                println!("get end ack");
+                return Ok(data_count);
+            }
+            let resp = Response::new(0, get_message.seq_num);
+            data.put(&get_message.content[..]);
+            std::thread::sleep(Duration::from_secs(1));
+            data_count += MESSAGE_CONTENT_SIZE;
+            response_send(stream, resp).unwrap();
+            true
+        }
+        Err(_) => {
+            println!(
+                "An error occurred, terminating connection with {}",
+                stream.peer_addr().unwrap()
+            );
+            stream.shutdown(Shutdown::Both).unwrap();
+            return Err(());
+        }
+    } {}
+    Ok(data_count)
 }
 pub fn message_send(mut stream: &TcpStream, msg: Message) -> Result<usize, ()> {
     let msg_serial = unsafe { serialize_any(&msg) };
