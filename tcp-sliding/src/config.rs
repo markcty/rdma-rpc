@@ -15,6 +15,7 @@ pub const FRAME_CONTENT_MAX_LEN: usize = 2048;
 pub const MAX_BUFF: usize = 128;
 pub const CONNECT_PASSWORD: u32 = 99;
 pub const END_ACK: u32 = 40;
+pub const MAX_MSG_SIZE: usize = 512;
 
 pub enum SendCase {
     Normal,

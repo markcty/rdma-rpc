@@ -1,4 +1,4 @@
-use crate::config::{END_ACK, LOCAL_HOST, MAX_BUFF};
+use crate::config::{END_ACK, LOCAL_HOST, MAX_BUFF, MAX_MSG_SIZE};
 use crate::tcp::session::{message_send, read_message_from_data, response_send};
 use crate::tcp::types::*;
 use crate::tcp::utils::server_prefix;
@@ -8,11 +8,16 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 
-use super::session::read_message;
+use super::session::{self, read_message, Session};
 pub fn run_server_background() {
     thread::spawn(|| {
         tcp_listener();
     });
+}
+fn handle_clientv(mut stream: TcpStream) {
+    let mut session = Session::server_build_session(stream);
+    let mut request_data = &[0u8; MAX_MSG_SIZE];
+    session.receive(request_data).unwrap();
 }
 fn handle_client(mut stream: TcpStream, mut request_data: &[u8]) {
     request_data = &[9u8; MAX_BUFF];

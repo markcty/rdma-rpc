@@ -5,7 +5,7 @@ use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MES
 use crate::tcp::utils::{client_prefix, server_prefix};
 use std::io::{Read, Write};
 
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 pub struct Session {
@@ -23,11 +23,40 @@ impl Session {
             Err(_) => Err(()),
         }
     }
-    pub fn reverse_session(stream: TcpStream) -> Session {
+    pub fn server_build_session(stream: TcpStream) -> Session {
         Session {
             stream: stream,
             send_case: SendCase::Normal,
         }
+    }
+    pub fn receive(mut self, mut data: &[u8]) -> Result<usize, ()> {
+        let mut cur_data = [0u8; MAX_BUFF];
+        let mut data_count = 0;
+        while match self.stream.read(&mut cur_data) {
+            Ok(_size) => {
+                // echo everything!
+                let get_message = read_message_from_data(cur_data).unwrap();
+                println!("{} => {:?}", server_prefix("get"), get_message);
+                if get_message.ack_num == END_ACK {
+                    println!("get end ack");
+                    return Ok(data_count);
+                }
+                let resp = Response::new(0, get_message.seq_num);
+                std::thread::sleep(Duration::from_secs(1));
+                data_count += MESSAGE_CONTENT_SIZE;
+                response_send(&self.stream, resp).unwrap();
+                true
+            }
+            Err(_) => {
+                println!(
+                    "An error occurred, terminating connection with {}",
+                    self.stream.peer_addr().unwrap()
+                );
+                self.stream.shutdown(Shutdown::Both).unwrap();
+                false
+            }
+        } {}
+        Ok(data_count)
     }
     pub fn send(self, data: &[u8]) -> Result<usize, ()> {
         let msg_total_num = (data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE;
