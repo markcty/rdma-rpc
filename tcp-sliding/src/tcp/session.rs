@@ -1,17 +1,17 @@
 use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
-use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK, LOSS_RATE, TIME_OUT};
+use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK, LOSS_RATE, TIME_OUT, WINDOW_SIZE};
 use crate::config::{MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
+use crate::tcp::utils::*;
 use crate::tcp::utils::{client_prefix, server_prefix};
 use bytes::{BufMut, BytesMut};
 use rand::Rng;
 use std::cmp::Ordering;
 use std::io::{Read, Write};
-use tokio::time::{self, Instant};
-
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
+use tokio::time::{self, Instant};
 pub struct Session {
     pub stream: TcpStream,
     pub send_case: SendCase,
@@ -100,21 +100,31 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
     let mut cur_data = [0u8; MAX_BUFF];
     let mut data_count = 0;
     let mut looking_for_seq = 0;
+    let mut window_base: u32 = 0;
+    let mut accept_range: [bool; WINDOW_SIZE] = [false; WINDOW_SIZE];
+    let mut cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
     while match stream.read(&mut cur_data) {
         Ok(_size) => {
             // echo everything!
             let get_message = read_message_from_data(cur_data).unwrap();
             println!(
-                "{} => {:?} looking for {}",
+                "{} => {:?}, window_base = {} ; accept_range = {:?}",
                 server_prefix("get"),
                 get_message,
-                looking_for_seq
+                window_base,
+                accept_range,
             );
             if get_message.ack_num == END_ACK {
                 println!("get end ack");
                 return Ok(data_count);
             }
-            if get_message.seq_num == looking_for_seq {
+            let cur_seq = get_message.seq_num;
+            if window_base <= cur_seq && cur_seq < window_base + WINDOW_SIZE as u32 {
+                assemble_cur_buffer(
+                    &cur_buffer,
+                    &get_message.content,
+                    (cur_seq - window_base) as usize,
+                );
                 data.put(&get_message.content[..]);
                 looking_for_seq += 1;
                 data_count += MESSAGE_CONTENT_SIZE;

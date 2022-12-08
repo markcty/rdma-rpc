@@ -18,3 +18,11 @@ pub fn client_prefix(action: &str) -> colored::ColoredString {
 pub fn server_prefix(action: &str) -> colored::ColoredString {
     format!("[Server][{}]", action).blue()
 }
+
+pub fn assemble_cur_buffer(mut data: &[u8], inner: &[u8], base: usize) {
+    let len = inner.len();
+    for i in 0..len {
+        data[i + base] = inner[i];
+    }
+    return;
+}

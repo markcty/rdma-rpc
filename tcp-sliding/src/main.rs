@@ -2,6 +2,7 @@ mod config;
 mod libs;
 mod tcp;
 use crate::tcp::types::serialize_any;
+use bytes::Bytes;
 use bytes::{BufMut, BytesMut};
 use crossbeam::channel::bounded;
 use std::thread;
@@ -79,10 +80,21 @@ fn lock_test() {
         println!("Time out");
     };
 }
+fn data_insert_test() {
+    let mut total_data = BytesMut::with_capacity(8);
+    let mut data = [0u8; 4];
+    data[2] = 1;
+    total_data.put(&data[..]);
+    println!("total data = {:?}", &total_data[..]);
+    data[2] = 8;
+    total_data.put(&data[..]);
+    println!("total data = {:?}", &total_data[..]);
+}
 fn main() {
     println!("hello world");
     // lock_test();
-    server_client_test();
+    data_insert_test()
+    // server_client_test();
     // ser_test();
     // bytemute_test();
 }
