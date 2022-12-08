@@ -93,8 +93,8 @@ fn data_insert_test() {
 fn main() {
     println!("hello world");
     // lock_test();
-    data_insert_test()
-    // server_client_test();
+    // data_insert_test()
+    server_client_test();
     // ser_test();
     // bytemute_test();
 }

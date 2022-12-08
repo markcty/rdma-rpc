@@ -19,10 +19,24 @@ pub fn server_prefix(action: &str) -> colored::ColoredString {
     format!("[Server][{}]", action).blue()
 }
 
-pub fn assemble_cur_buffer(mut data: &[u8], inner: &[u8], base: usize) {
+pub fn assemble_cur_buffer(data: &mut [u8], inner: &[u8], base: usize) {
+    println!("base = {}", base);
     let len = inner.len();
     for i in 0..len {
         data[i + base] = inner[i];
     }
     return;
+}
+
+pub fn build_u32_from_u8(data: &[u8]) -> Result<u32, ()> {
+    if data.len() < 4 {
+        Err(())
+    } else {
+        Ok(
+            (data[0] as u32)
+                << 24 + (data[1] as u32)
+                << 16 + (data[2] as u32)
+                << 8 + data[3] as u32,
+        )
+    }
 }

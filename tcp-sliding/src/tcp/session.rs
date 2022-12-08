@@ -1,5 +1,7 @@
 use super::types::{deserialize_message, serialize_any, Response, RESPONSE_SIZE};
-use crate::config::{SendCase, CONNECT_PASSWORD, END_ACK, LOSS_RATE, TIME_OUT, WINDOW_SIZE};
+use crate::config::{
+    SendCase, CONNECT_PASSWORD, END_ACK, LOSS_RATE, SIZE_ACK, TIME_OUT, WINDOW_SIZE,
+};
 use crate::config::{MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use crate::tcp::utils::*;
@@ -99,10 +101,12 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
     stream.set_read_timeout(None).unwrap();
     let mut cur_data = [0u8; MAX_BUFF];
     let mut data_count = 0;
-    let mut looking_for_seq = 0;
     let mut window_base: u32 = 0;
-    let mut accept_range: [bool; WINDOW_SIZE] = [false; WINDOW_SIZE];
+    let mut accept_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
+    let mut cur_window_size: u32 = WINDOW_SIZE as u32;
     let mut cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
+    let mut buffer_left = WINDOW_SIZE;
+    let mut total_size: u32 = WINDOW_SIZE as u32;
     while match stream.read(&mut cur_data) {
         Ok(_size) => {
             // echo everything!
@@ -114,24 +118,58 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
                 window_base,
                 accept_range,
             );
-            if get_message.ack_num == END_ACK {
-                println!("get end ack");
-                return Ok(data_count);
+            match get_message.ack_num {
+                SIZE_ACK => {
+                    total_size = build_u32_from_u8(&get_message.content[..]).unwrap();
+                    if total_size < cur_window_size {
+                        // already get all in the first window
+                        if buffer_left as u32 + total_size == cur_window_size {
+                            data.put(&cur_buffer[0..total_size as usize * MESSAGE_CONTENT_SIZE]);
+                        }
+                        cur_window_size = total_size;
+                    }
+                    let resp = Response::new(0, SIZE_ACK);
+                    response_send(stream, resp).unwrap();
+                }
+                END_ACK => {
+                    data.put(&cur_buffer[0..(WINDOW_SIZE - buffer_left) * MESSAGE_CONTENT_SIZE]);
+                    println!("{}", server_prefix("get end ack"));
+                    return Ok(data_count);
+                }
+                _ => {
+                    let cur_seq = get_message.seq_num;
+                    // new data frame get
+                    if window_base <= cur_seq
+                        && cur_seq < window_base + WINDOW_SIZE as u32
+                        && accept_range[(cur_seq - window_base) as usize]
+                    {
+                        // need to save data
+                        buffer_left -= 1;
+                        accept_range[(cur_seq - window_base) as usize] = false;
+                        assemble_cur_buffer(
+                            &mut cur_buffer,
+                            &get_message.content,
+                            (cur_seq - window_base) as usize * MESSAGE_CONTENT_SIZE,
+                        );
+                        println!("{} {:?}", server_prefix("get new data"), cur_buffer);
+                        data_count += MESSAGE_CONTENT_SIZE;
+                        if buffer_left == 0 {
+                            data.put(&cur_buffer[..]);
+                            window_base += WINDOW_SIZE as u32;
+                            // if window_base + WINDOW_SIZE as u32 > total_size {
+                            //     cur_window_size = total_size - window_base;
+                            // }
+                            accept_range = [true; WINDOW_SIZE];
+                            buffer_left = cur_window_size as usize;
+                            cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
+                        }
+                    }
+                    // need to reply ack_num
+                    let resp = Response::new(0, get_message.seq_num);
+                    response_send(stream, resp).unwrap();
+                }
             }
-            let cur_seq = get_message.seq_num;
-            if window_base <= cur_seq && cur_seq < window_base + WINDOW_SIZE as u32 {
-                assemble_cur_buffer(
-                    &cur_buffer,
-                    &get_message.content,
-                    (cur_seq - window_base) as usize,
-                );
-                data.put(&get_message.content[..]);
-                looking_for_seq += 1;
-                data_count += MESSAGE_CONTENT_SIZE;
-                std::thread::sleep(Duration::from_secs(1));
-                let resp = Response::new(0, get_message.seq_num);
-                response_send(stream, resp).unwrap();
-            }
+
             true
         }
         Err(_) => {
