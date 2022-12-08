@@ -6,7 +6,7 @@ use crate::config::{MAX_BUFF, SEND_CASE};
 use crate::tcp::types::{deserialize_response, Message, MESSAGE_CONTENT_SIZE, MESSAGE_SIZE};
 use crate::tcp::utils::*;
 use crate::tcp::utils::{client_prefix, server_prefix};
-use bytes::{BufMut, BytesMut};
+use bytes::{buf, BufMut, BytesMut};
 use rand::Rng;
 use std::cmp::Ordering;
 use std::io::{Read, Write};
@@ -53,49 +53,108 @@ pub fn send_data(stream: &TcpStream, data: &[u8]) -> Result<usize, ()> {
         .set_read_timeout(Some(Duration::from_micros(10)))
         .unwrap();
 
-    let mut send_count: usize = 0;
-    let mut idx: u32 = 0;
     // while sending_idx < msg_total_num{
     //     if stream.re
     // }
-    let mut ack_flag = true;
+    let mut waiting_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
+    let mut window_base: usize = 0;
     let mut start_time = Instant::now();
-    while idx < msg_total_num as u32 {
-        if ack_flag {
-            start_time = Instant::now();
-            let down_bound = idx as usize * MESSAGE_CONTENT_SIZE;
-            let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
-            println!("down = {}, up = {}", down_bound, up_bound);
-            let content = data[down_bound..up_bound]
-                .try_into()
-                .expect("slice with incorrect length");
-            let send_msg = Message::new(idx, 0, content);
-            println!("{} msg = {:?}", client_prefix("assemble"), send_msg);
-            let send_num = message_send(stream, send_msg).unwrap();
-            send_count += send_num;
-            ack_flag = false;
-        } else {
-            // let get_resp = read_response_short_time(stream).unwrap();
-            let duration = start_time.elapsed();
-            if duration.cmp(&TIME_OUT) == Ordering::Greater {
-                println!("{}", client_prefix("loss package"));
-                ack_flag = true;
-                continue;
-            }
-            match read_response_short_time(stream) {
-                Ok(get_resp) => {
-                    println!("{} {:?}", client_prefix("get"), get_resp);
-                    idx += 1;
-                    ack_flag = true;
+    let mut over_time = true;
+    let mut up_num = if window_base + WINDOW_SIZE < msg_total_num {
+        window_base + WINDOW_SIZE
+    } else {
+        msg_total_num
+    };
+    // return Ok(0);
+    let mut buffer_left: usize = up_num;
+    println!(
+        "window base = {}, up_num = {}, buffer_left = {}",
+        window_base, up_num, buffer_left
+    );
+    loop {
+        // over time, re-send packages
+        if over_time {
+            // in the window
+            for seq_num in window_base..up_num {
+                // only re-send those still waiting
+                if waiting_range[seq_num - window_base] {
+                    let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
+                    let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
+                    println!("down = {}, up = {}", down_bound, up_bound);
+                    let content = data[down_bound..up_bound]
+                        .try_into()
+                        .expect("slice with incorrect length");
+                    let send_msg = Message::new(seq_num as u32, 0, content);
+                    println!("{} msg = {:?}", client_prefix("send"), send_msg);
+                    message_send(stream, send_msg).unwrap();
                 }
-                Err(_) => {}
-            };
+            }
+            start_time = Instant::now();
+            over_time = false;
+        } else {
+            // polling to listen reply
+            if match read_response_short_time(stream) {
+                Ok(get_resp) => {
+                    println!(
+                        "{} {:?}; waiting range = {:?}",
+                        client_prefix("get"),
+                        get_resp,
+                        waiting_range
+                    );
+                    // new ack
+                    if window_base <= get_resp.ack_num as usize
+                        && (get_resp.ack_num as usize) < up_num
+                        && waiting_range[get_resp.ack_num as usize - window_base]
+                    {
+                        buffer_left -= 1;
+                        waiting_range[get_resp.ack_num as usize - window_base] = false;
+                        if buffer_left == 0 {
+                            if up_num == msg_total_num {
+                                // all package done
+                                break;
+                            } else {
+                                // one window done
+                                window_base = up_num;
+                                up_num = if window_base + WINDOW_SIZE < msg_total_num {
+                                    window_base + WINDOW_SIZE
+                                } else {
+                                    msg_total_num
+                                };
+                                buffer_left = up_num - window_base;
+                                waiting_range = [true; WINDOW_SIZE];
+                                // switch on over_time for sending the next window
+                                over_time = true;
+                            }
+                        }
+                        true
+                    } else {
+                        // only get new ack is valid
+                        false
+                    }
+                }
+                Err(_) => false,
+            } {
+                // get new ack, do nothing
+            } else {
+                // didn't get new ack, check if over time
+                let duration = start_time.elapsed();
+                if duration.cmp(&TIME_OUT) == Ordering::Greater {
+                    println!(
+                        "{}  waiting_range = {:?}",
+                        client_prefix("overtime"),
+                        waiting_range
+                    );
+                    over_time = true;
+                }
+            }
         }
+
+        thread::sleep(Duration::from_millis(500));
     }
     let end_msg = Message::new(0, END_ACK, [0u8; MESSAGE_CONTENT_SIZE]);
     message_send(stream, end_msg).unwrap();
     std::thread::sleep(Duration::from_secs(1));
-    Ok(send_count)
+    Ok(0)
 }
 pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize, ()> {
     stream.set_read_timeout(None).unwrap();
@@ -169,7 +228,6 @@ pub fn receive_data(mut stream: &TcpStream, data: &mut BytesMut) -> Result<usize
                     response_send(stream, resp).unwrap();
                 }
             }
-
             true
         }
         Err(_) => {
