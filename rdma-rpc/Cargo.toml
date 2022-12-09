@@ -3,18 +3,23 @@ name = "rdma-rpc"
 version = "0.1.0"
 edition = "2021"
 
+[[example]]
+name = "kv-rpc-server"
+path = "examples/kv/kv_server.rs"
+
+[[example]]
+name = "kv-rpc-client"
+path = "examples/kv/kv_client.rs"
+
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 KRdmaKit = { path = "../deps/krcore/KRdmaKit" }
-libc = { version = "0.2.138", default-features = false }
-thiserror-no-std = "2.0.2"
-
-[dev-dependencies]
-clap = { version = "4.0.18", features = ["derive"] }
-env_logger = "0.10.0"
-log = "0.4.17"
-anyhow = { version = "1.0.66", default-features = false }
+rdma-rpc-core = { path = "../rdma-rpc-core" }
+rand = "0.8.5"
+serde = { version = "1.0", features = ["derive"] }
+spin = "0.9.4"
 
 [features]
 default = ["user"]
