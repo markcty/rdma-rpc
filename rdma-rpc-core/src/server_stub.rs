@@ -1,10 +1,14 @@
 extern crate alloc;
 
-use crate::{error::Error, session::Session, utils::poll_packets};
+use crate::{error::Error, messages::BUF_SIZE, session::Session, utils::poll_packets};
 use alloc::{collections::BTreeMap, sync::Arc};
 use serde::{de::DeserializeOwned, Serialize};
 use spin::Mutex;
-use KRdmaKit::{log::warn, QueuePair};
+use KRdmaKit::{
+    context::Context,
+    log::{info, warn},
+    MemoryRegion, QueuePair, QueuePairBuilder, UDriver,
+};
 
 pub trait RpcHandler: Send + Sync {
     type Args;
@@ -16,6 +20,8 @@ pub struct ServerStub<T, R> {
     sessions: Arc<Mutex<BTreeMap<u64, Session>>>,
     qp: Arc<QueuePair>,
     handler: Arc<dyn RpcHandler<Args = T, Resp = R>>,
+    ctx: Arc<Context>,
+    mr: Arc<MemoryRegion>,
 }
 
 impl<T, R> ServerStub<T, R>
@@ -30,8 +36,45 @@ where
         sessions: Arc<Mutex<BTreeMap<u64, Session>>>,
         handler: Arc<dyn RpcHandler<Args = T, Resp = R>>,
     ) -> Result<Self, Error> {
-        // create context and qp
-        todo!()
+        // create context
+        let ctx = {
+            let udriver = UDriver::create().expect("no device");
+            let device = if let Some(device) = udriver.devices().iter().find(|d| d.name() == dev) {
+                device
+            } else {
+                return Err(Error::Internal(alloc::format!("can't find device {dev}")));
+            };
+            device.open_context().expect("can't open context")
+        };
+
+        // create qp
+        let qp = {
+            let builder = QueuePairBuilder::new(&ctx);
+            let qp = builder
+                .build_ud()
+                .expect("failed to build UD QP")
+                .bring_up_ud()
+                .expect("failed to bring up UD QP");
+            info!("QP status: {:?}", qp.status());
+            qp
+        };
+        info!("QP num: {:?}, qkey: {:?}", qp.qp_num(), qp.qkey());
+
+        // create mr
+        // for the MR, its layout is:
+        // |0    ... 1024 | // send buffer
+        // |1024 ... 2048 | // receive buffer
+        let mr = Arc::new(
+            MemoryRegion::new(Arc::clone(&ctx), BUF_SIZE as usize).expect("failed to allocate MR"),
+        );
+
+        Ok(Self {
+            sessions,
+            qp,
+            handler,
+            ctx,
+            mr,
+        })
     }
 
     pub fn add_session(&self, session: Session) {
@@ -52,7 +95,7 @@ where
     pub fn serve(self) {
         loop {
             // poll
-            let packets = poll_packets(self.qp.as_ref()).unwrap();
+            let packets = poll_packets(self.qp.as_ref(), Arc::clone(&self.mr)).unwrap();
 
             for packet in packets {
                 // dispatch the packet to its session
@@ -82,5 +125,17 @@ where
                 }
             }
         }
+    }
+
+    pub fn qp(&self) -> Arc<QueuePair> {
+        Arc::clone(&self.qp)
+    }
+
+    pub fn ctx(&self) -> Arc<Context> {
+        Arc::clone(&self.ctx)
+    }
+
+    pub fn mr(&self) -> Arc<MemoryRegion> {
+        Arc::clone(&self.mr)
     }
 }

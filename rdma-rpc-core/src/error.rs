@@ -7,6 +7,8 @@ pub enum Error {
     Connect,
     #[error("failed to encode rpc args")]
     EncodeArgs,
+    #[error("failed to decode rpc args")]
+    DecodeArgs,
     #[error("failed to decode rpc response")]
     DecodeResp,
     #[error("internal error, {0}")]

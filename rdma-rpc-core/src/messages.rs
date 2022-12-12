@@ -1,4 +1,10 @@
 use serde::{Deserialize, Serialize};
+use KRdmaKit::services_user::ibv_gid_wrapper;
+
+// for the MR, its layout is:
+// |0    ... 1024 | // send buffer
+// |1024 ... 2048 | // receive buffer
+pub(crate) const BUF_SIZE: u64 = 4096;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Packet<T> {
@@ -24,7 +30,7 @@ impl<T> Packet<T> {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct QPInfo {
     pub lid: u32,
-    pub gid: u128,
+    pub gid: ibv_gid_wrapper,
     pub qp_num: u32,
     pub qkey: u32,
 }

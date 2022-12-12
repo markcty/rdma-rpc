@@ -19,7 +19,7 @@ impl Session {
         self.id
     }
 
-    pub(crate) fn send<T: Serialize>(&self, data: T) -> Result<(), Error> {
+    pub fn send<T: Serialize>(&self, data: T) -> Result<(), Error> {
         self.transport.send(self.id, data)?;
         Ok(())
     }

@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use std::{
+    io::{Read, Write},
     marker::PhantomData,
     net::{SocketAddrV4, TcpListener},
     thread,
@@ -9,7 +10,6 @@ use std::{
 use alloc::{collections::BTreeMap, sync::Arc};
 use rdma_rpc_core::{
     client_stub::ClientStub,
-    messages::QPInfo,
     server_stub::{RpcHandler, ServerStub},
     session::Session,
     transport::Transport,
@@ -57,21 +57,35 @@ where
 
         for stream in listener.incoming() {
             match stream {
-                Ok(stream) => {
+                Ok(mut stream) => {
                     // create a new session
                     let session_id = rand::random();
 
                     // receive QPInfo from stream
-                    let qp_info = QPInfo {
-                        lid: 0,
-                        gid: 0,
-                        qp_num: 0,
-                        qkey: 0,
-                    };
+                    let mut buf: Vec<u8> = Vec::new();
+                    stream
+                        .read_to_end(&mut buf)
+                        .expect("failed to read client info");
+                    let client_qp_info =
+                        bincode::deserialize(&buf).expect("failed to deserialize qp info"); // TODO: handle error
 
-                    let transport = Transport::new(qp_info).unwrap(); // TODO: handle error
+                    // create the transport
+
+                    let transport = Transport::new(
+                        server_stub.qp(),
+                        client_qp_info,
+                        server_stub.ctx(),
+                        server_stub.mr(),
+                    )
+                    .unwrap(); // TODO: handle error
 
                     // send self qp_info
+                    let server_qp_info = transport.self_qp_info();
+                    let data = bincode::serialize(&server_qp_info).unwrap();
+                    let res = stream.write_all(&data);
+                    if res.is_err() {
+                        // TODO: handle error
+                    }
 
                     // create session
                     let session = Session::new(session_id, transport);
