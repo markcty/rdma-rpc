@@ -20,17 +20,20 @@ impl Session {
     }
 
     pub(crate) fn send<T: Serialize>(&self, data: T) -> Result<(), Error> {
-        self.transport.send(self.id, data)?;
+        // TODO: devide data into multiple packets if needed
+        let packet = Packet::new(self.id, data);
+        self.transport.send(packet)?;
         Ok(())
     }
 
     /// Return true if the packet is the expected one
-    pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<Packet<R>, Error> {
+    pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<R, Error> {
+        // TODO: assemble the packets to R
         let packet = self.transport.recv()?;
         assert_eq!(packet.session_id(), self.id);
 
         // TODO: handle reorder and lost
 
-        Ok(packet)
+        Ok(packet.into_inner())
     }
 }

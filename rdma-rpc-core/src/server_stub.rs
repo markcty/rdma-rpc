@@ -3,7 +3,7 @@ extern crate alloc;
 use crate::session::Session;
 use alloc::sync::Arc;
 use serde::{de::DeserializeOwned, Serialize};
-use KRdmaKit::log::warn;
+use tracing::{info, warn};
 
 pub trait RpcHandler: Send + Sync {
     type Args;
@@ -26,18 +26,19 @@ where
         Self { session, handler }
     }
 
-    pub fn serve(self) {
+    pub fn serve(self) -> ! {
         loop {
             // validate the packet
-            let packet = match self.session.recv() {
+            let args = match self.session.recv() {
                 Err(err) => {
                     warn!("failed to recv new request, {err}");
                     continue;
                 }
                 Ok(packet) => packet,
             };
+            info!("new request from client");
 
-            let args = packet.into_inner();
+            // handle the request
             let resp = self.handler.handle(args);
 
             // send back the response

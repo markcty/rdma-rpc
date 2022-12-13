@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc::{slice, string::String};
 use thiserror_no_std::Error;
 

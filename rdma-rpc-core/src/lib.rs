@@ -10,8 +10,6 @@ pub mod server_stub;
 pub mod session;
 pub mod transport;
 
-pub type RpcId = u64;
-
 #[cfg(test)]
 mod tests {
     use KRdmaKit::UDriver;

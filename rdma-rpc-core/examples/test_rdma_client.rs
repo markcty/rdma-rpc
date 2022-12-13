@@ -21,34 +21,34 @@ fn main() {
     let ctx = {
         let udriver = UDriver::create().expect("no device");
         let device = udriver.get_dev(0).expect("no device");
-        info!("use device {}", device.name());
+        println!("use device {}", device.name());
         device.open_context().expect("can't open context")
     };
-    info!("Context: {:?}", ctx);
+    println!("Context: {:?}", ctx);
 
     // check the port attribute
     let port_attr = ctx.get_port_attr(IB_PORT).expect("query port error");
-    info!("Port Attribute: {:?}", port_attr);
+    println!("Port Attribute: {:?}", port_attr);
 
     // check the lid
     let lid = port_attr.lid;
-    info!("LID: {:?}", lid);
+    println!("LID: {:?}", lid);
 
     // check the gid
     let gid = ctx.query_gid(IB_PORT, GID_IDX).expect("query gid failed");
-    info!("GID: {:?}", gid);
+    println!("GID: {:?}", gid);
 
     // create a MR
     let mr = MemoryRegion::new(ctx.clone(), BUF_SIZE as usize).expect("failed to allocate MR");
     let buffer: &mut [u8] =
         unsafe { std::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize) };
-    info!("MR rkey and lkey: {:?} {:?}", mr.rkey(), mr.lkey());
+    println!("MR rkey and lkey: {:?} {:?}", mr.rkey(), mr.lkey());
 
     // create the client-side endpoint
     // TODO: you need to get these arguments from the server. I just use my default for simplicity.
     let endpoint = DatagramEndpoint::new(&ctx, 1, lid as u32, gid, 24, 73)
         .expect("UD endpoint creation fails");
-    info!("sanity check UD endpoint: {:?}", endpoint);
+    println!("sanity check UD endpoint: {:?}", endpoint);
 
     // create the client-side QP
     let qp = {
@@ -58,7 +58,7 @@ fn main() {
             .expect("failed to build UD QP")
             .bring_up_ud()
             .expect("failed to bring up UD QP");
-        info!("QP status: {:?}", qp.status());
+        println!("QP status: {:?}", qp.status());
         qp
     };
 
