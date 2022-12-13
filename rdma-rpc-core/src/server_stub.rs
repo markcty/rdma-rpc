@@ -1,10 +1,9 @@
 extern crate alloc;
 
-use crate::{error::Error, session::Session};
-use alloc::{collections::BTreeMap, sync::Arc};
+use crate::session::Session;
+use alloc::sync::Arc;
 use serde::{de::DeserializeOwned, Serialize};
-use spin::Mutex;
-use KRdmaKit::{log::warn, QueuePair};
+use KRdmaKit::log::warn;
 
 pub trait RpcHandler: Send + Sync {
     type Args;
@@ -14,7 +13,6 @@ pub trait RpcHandler: Send + Sync {
 
 pub struct ServerStub<T, R> {
     session: Session,
-    qp: Arc<QueuePair>,
     handler: Arc<dyn RpcHandler<Args = T, Resp = R>>,
 }
 
@@ -25,8 +23,7 @@ where
 {
     /// Session is maintained by the outside because in no_std, we cannot spawn another thread to handle incomming connection
     pub fn new(session: Session, handler: Arc<dyn RpcHandler<Args = T, Resp = R>>) -> Self {
-        // create context and qp
-        todo!()
+        Self { session, handler }
     }
 
     pub fn serve(self) {

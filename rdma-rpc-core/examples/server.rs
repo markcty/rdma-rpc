@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use rdma_rpc::server_stub::RpcHandler;
+use rdma_rpc_core::server_stub::RpcHandler;
 
 struct KVRpc {
     store: Arc<Mutex<HashMap<i32, i32>>>,

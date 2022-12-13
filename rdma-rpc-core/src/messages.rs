@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use KRdmaKit::services_user::ibv_gid_wrapper;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Packet<T> {
@@ -24,7 +25,8 @@ impl<T> Packet<T> {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct QPInfo {
     pub lid: u32,
-    pub gid: u128,
+    pub gid: ibv_gid_wrapper,
     pub qp_num: u32,
     pub qkey: u32,
+    pub session_id: Option<u64>,
 }

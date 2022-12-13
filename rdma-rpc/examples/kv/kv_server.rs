@@ -40,9 +40,9 @@ impl KVRpcHandler {
 
 fn main() {
     Server::new(
-        "rxe0",
+        "rxe_0",
         1,
-        "0.0.0.0:0".parse().unwrap(),
+        "127.0.0.1:10001".parse().unwrap(),
         Arc::new(KVRpcHandler::new()),
     )
     .unwrap()
