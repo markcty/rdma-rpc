@@ -36,6 +36,7 @@ impl Transport {
             .map_err(|err| Error::Internal(format!("failed to bring up ud, {err}")))?;
 
         info!("QP num: {:?}, qkey: {:?}", qp.qp_num(), qp.qkey());
+        error!("hello into new datagram endpoint");
         let endpoint = DatagramEndpoint::new(
             &context,
             port,
@@ -45,15 +46,17 @@ impl Transport {
             qp_info.qkey,
         )
         .map_err(|_| Error::Internal("UD endpoint creation fails".to_string()))?;
+        info!("create mr ");
 
         // create mr
         let mr = MemoryRegion::new(Arc::clone(&context), MR_SIZE as usize)
             .map_err(|err| Error::Internal(format!("failed to allocate MR, {err}")))?;
 
+        info!("Init Post recv");
         // init post recv
         qp.post_recv(&mr, BUF_SIZE..MR_SIZE, 1)
             .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
-
+        info!("Post finished");
         Ok(Self { qp, endpoint, mr })
     }
 
@@ -142,17 +145,13 @@ impl Transport {
     pub(crate) fn recv_fa<R: DeserializeOwned>(&self) -> Result<Packet<R>, Error> {
         // poll recv cq
         let mut wcs = [Default::default()];
-        let res = {
-            let res = self
-                .qp
-                .poll_recv_cq(&mut wcs)
-                .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
-            if !res.is_empty() {
-                res
-            } else {
-                return Err(());
-            }
-        };
+        let res = self
+            .qp
+            .poll_recv_cq(&mut wcs)
+            .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
+        if res.is_empty() {
+            return Err(Error::Receive);
+        }
         info!("transport recv packet");
 
         // post recv

@@ -4,7 +4,8 @@ use std::{
     io::{Read, Write},
     marker::PhantomData,
     net::{SocketAddrV4, TcpListener, TcpStream},
-    thread,
+    thread, time,
+    time::Duration,
 };
 
 use alloc::sync::Arc;
@@ -111,6 +112,7 @@ where
                     return;
                 }
             };
+
             let client_qp_info: QPInfo = match bincode::deserialize(&buf[0..size]) {
                 Ok(qp_info) => qp_info,
                 Err(err) => {
@@ -130,6 +132,8 @@ where
                     return;
                 }
             };
+            error!("transport finished new");
+            // return;
             let qp_info = transport.qp_info();
 
             // send back self info
@@ -138,7 +142,9 @@ where
                 qp_info,
                 session_id,
             };
+
             let session_info = bincode::serialize(&session_info).unwrap();
+            info!("session_info = {:?}", session_info);
             if let Err(err) = stream.write_all(&session_info) {
                 warn!("failed to send session info to the client, {err}");
             }
@@ -149,6 +155,9 @@ where
             info!("session {session_id} start serving");
             server_stub.serve()
         });
+        thread::sleep(time::Duration::from_secs(10));
+
+        info!("handle ended");
     }
 }
 
@@ -211,15 +220,28 @@ where
         let mut stream =
             TcpStream::connect(addr).map_err(|err| ClientError::Connect(err.to_string()))?;
         let data = bincode::serialize(&client_qp_info).unwrap();
+        info!("send data = {:?}", data);
+        // stream.write(&data).unwrap();
         stream.write_all(&data).map_err(|err| {
             ClientError::Connect(format!("failed to send self qp_info to the server, {err}"))
         })?;
 
         // receive session info
         let mut buf = [0; 1024];
-        let size = stream.read(&mut buf).map_err(|err| {
-            ClientError::Connect(format!("failed to recv session info from server, {err}"))
-        })?;
+        // let size = stream.read(&mut buf).map_err(|err| {
+        //     ClientError::Connect(format!("failed to recv session info from server, {err}"))
+        // })?;
+        stream.set_read_timeout(None).unwrap();
+        let mut size = 0usize;
+        match stream.read(&mut buf) {
+            Ok(rd_size) => {
+                info!("stream read {:?}", buf);
+                info!("stream read size = {rd_size}");
+                size = rd_size;
+            }
+            Err(_) => {}
+        };
+        info!("stream read {:?}", buf);
         let SessionInfo {
             qp_info,
             session_id,

@@ -11,6 +11,11 @@ path = "examples/kv/kv_server.rs"
 name = "kv-rpc-client"
 path = "examples/kv/kv_client.rs"
 
+[[example]]
+name = "ser-cli-test"
+path = "examples/kv/kv_server_client.rs"
+
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
