@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use KRdmaKit::services_user::ibv_gid_wrapper;
 
 /// Packet is the base element transmitted on the rdma network
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct Packet<T> {
     // TODO: add header like ack, syn
     session_id: u64,

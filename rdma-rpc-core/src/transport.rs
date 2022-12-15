@@ -22,7 +22,7 @@ const UD_DATA_OFFSET: usize = 40; // For a UD message, the first 40 bytes are re
 pub struct Transport {
     qp: Arc<QueuePair>,
     endpoint: DatagramEndpoint,
-    mr: MemoryRegion,
+    pub mr: MemoryRegion,
 }
 
 impl Transport {
@@ -83,7 +83,6 @@ impl Transport {
 
         Ok(Self { qp, endpoint, mr })
     }
-
     pub(crate) fn send<T: Serialize>(&self, packet: Packet<T>) -> Result<(), Error> {
         // serialize arg
         let buffer: &mut [u8] = unsafe {
@@ -95,6 +94,26 @@ impl Transport {
         // post send
         self.qp
             .post_datagram(&self.endpoint, &self.mr, 0..size, 1, true)
+            .map_err(|err| {
+                error!("failed to post datagram: {err}");
+                Error::Internal(err.to_string())
+            })?;
+        info!(
+            "transport send packet to remote qpn {:?}",
+            self.endpoint.qpn()
+        );
+
+        Ok(())
+    }
+    pub(crate) fn send_u8(
+        &self,
+        mr: &MemoryRegion,
+        start_pos: u64,
+        end_pos: u64,
+    ) -> Result<(), Error> {
+        // post send
+        self.qp
+            .post_datagram(&self.endpoint, mr, start_pos..end_pos, 1, true)
             .map_err(|err| {
                 error!("failed to post datagram: {err}");
                 Error::Internal(err.to_string())
@@ -150,7 +169,7 @@ impl Transport {
             if !res.is_empty() {
                 res
             } else {
-                return Err(());
+                return Err(Error::Receive);
             }
         };
         info!("transport recv packet");

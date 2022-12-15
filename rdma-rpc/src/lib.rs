@@ -122,7 +122,7 @@ where
             info!("client qp info: {client_qp_info}");
 
             // create transport and self qp_info
-            let transport = match Transport::new(context, client_qp_info, ib_port) {
+            let transport = match Transport::new(Arc::clone(&context), client_qp_info, ib_port) {
                 Ok(transport) => transport,
                 Err(e) => {
                     warn!("failed to create transport for client, {e}");
@@ -144,7 +144,7 @@ where
             }
 
             // start serving
-            let session = Session::new(session_id, transport);
+            let session = Session::new(Arc::clone(&context), session_id, transport);
             let server_stub = ServerStub::new(session, handler);
             info!("session {session_id} start serving");
             server_stub.serve()
@@ -230,7 +230,7 @@ where
 
         // create client stub
         let tranport = Transport::new_with_qp(qp, Arc::clone(&context), qp_info, ib_port).unwrap();
-        let session = Session::new(session_id, tranport);
+        let session = Session::new(Arc::clone(&context), session_id, tranport);
         let client_stub = ClientStub::new(session);
 
         Ok(Self {

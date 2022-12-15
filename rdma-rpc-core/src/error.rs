@@ -11,6 +11,8 @@ pub enum Error {
     DecodeResp,
     #[error("internal error, {0}")]
     Internal(String),
+    #[error("receive error")]
+    Receive,
 }
 
 impl From<bincode::Error> for Error {
