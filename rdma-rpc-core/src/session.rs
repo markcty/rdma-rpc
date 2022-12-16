@@ -150,6 +150,7 @@ impl Session {
             data.clone()[0..MESSAGE_CONTENT_SIZE].try_into().unwrap(),
         );
         let mut base = 0;
+        let mut upper = MESSAGE_CONTENT_SIZE;
         let mut round_cnt = ROUND_MAX;
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
@@ -174,11 +175,16 @@ impl Session {
                         break;
                     }
                     base += MESSAGE_CONTENT_SIZE;
+                    upper = if base + MESSAGE_CONTENT_SIZE > data.len() {
+                        data.len()
+                    } else {
+                        base + MESSAGE_CONTENT_SIZE
+                    };
                     send_packet = Packet::new(
                         self.ack,
                         self.syn,
                         self.id,
-                        data[base..base + MESSAGE_CONTENT_SIZE].try_into().unwrap(),
+                        data[base..upper].try_into().unwrap(),
                     );
                     round_cnt = ROUND_MAX;
                 }
