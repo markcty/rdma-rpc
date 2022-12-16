@@ -1,27 +1,51 @@
 use core::fmt::Display;
 
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use KRdmaKit::services_user::ibv_gid_wrapper;
 
 /// Packet is the base element transmitted on the rdma network
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Packet<T> {
-    // TODO: add header like ack, syn
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Packet {
+    ack: u64,
+    syn: u64,
     session_id: u64,
-    data: T, // typically: this should be Vec<u8>
+    data: Vec<u8>, // typically: this should be Vec<u8>
 }
 
-impl<T> Packet<T> {
-    pub(crate) fn new(session_id: u64, data: T) -> Packet<T> {
-        Self { session_id, data }
+impl Packet {
+    pub(crate) fn new_empty(ack: u64, syn: u64, session_id: u64) -> Packet {
+        Packet {
+            ack,
+            syn,
+            session_id,
+            data: Vec::new(),
+        }
     }
 
-    pub(crate) fn into_inner(self) -> T {
-        self.data
+    pub(crate) fn new(ack: u64, syn: u64, session_id: u64, data: Vec<u8>) -> Packet {
+        Self {
+            ack,
+            syn,
+            session_id,
+            data,
+        }
     }
 
     pub(crate) fn session_id(&self) -> u64 {
         self.session_id
+    }
+
+    pub(crate) fn ack(&self) -> u64 {
+        self.ack
+    }
+
+    pub(crate) fn syn(&self) -> u64 {
+        self.syn
+    }
+
+    pub(crate) fn data(&self) -> &[u8] {
+        self.data.as_slice()
     }
 }
 
