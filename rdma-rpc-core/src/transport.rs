@@ -1,5 +1,4 @@
 use alloc::{format, string::ToString, sync::Arc};
-use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 use KRdmaKit::{
     context::Context,
@@ -83,7 +82,7 @@ impl Transport {
 
         Ok(Self { qp, endpoint, mr })
     }
-    pub(crate) fn send<T: Serialize>(&self, packet: Packet<T>) -> Result<(), Error> {
+    pub(crate) fn send(&self, packet: Packet) -> Result<(), Error> {
         // serialize arg
         let buffer: &mut [u8] = unsafe {
             alloc::slice::from_raw_parts_mut(self.mr.get_virt_addr() as _, BUF_SIZE as usize)
@@ -126,7 +125,7 @@ impl Transport {
         Ok(())
     }
 
-    pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<Packet<R>, Error> {
+    pub(crate) fn recv(&self) -> Result<Packet, Error> {
         // poll recv cq
         let mut wcs = [Default::default()];
         let res = loop {
@@ -148,7 +147,7 @@ impl Transport {
         // deserialize arg
         assert!(res.len() == 1);
         let msg_sz = res[0].byte_len as usize - UD_DATA_OFFSET;
-        let msg: Packet<R> = bincode::deserialize(unsafe {
+        let msg = bincode::deserialize(unsafe {
             alloc::slice::from_raw_parts(
                 (self.mr.get_virt_addr() as usize + BUF_SIZE as usize + UD_DATA_OFFSET) as *mut u8,
                 msg_sz,
@@ -190,6 +189,38 @@ impl Transport {
         })?;
 
         Ok(msg)
+    }
+
+    pub(crate) fn try_recv(&self) -> Result<Option<Packet>, Error> {
+        // poll recv cq
+        let mut wcs = [Default::default()];
+
+        let res = self
+            .qp
+            .poll_recv_cq(&mut wcs)
+            .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
+        if res.is_empty() {
+            return Ok(None);
+        }
+
+        info!("transport try recv succeeded");
+
+        // post recv
+        self.qp
+            .post_recv(&self.mr, BUF_SIZE..MR_SIZE, 1)
+            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+
+        // deserialize arg
+        assert!(res.len() == 1);
+        let msg_sz = res[0].byte_len as usize - UD_DATA_OFFSET;
+        let msg = bincode::deserialize(unsafe {
+            alloc::slice::from_raw_parts(
+                (self.mr.get_virt_addr() as usize + BUF_SIZE as usize + UD_DATA_OFFSET) as *mut u8,
+                msg_sz,
+            )
+        })?;
+
+        Ok(Some(msg))
     }
 
     pub fn qp_info(&self) -> QPInfo {

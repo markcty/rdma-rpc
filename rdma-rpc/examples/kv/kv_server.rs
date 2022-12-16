@@ -7,6 +7,7 @@ use protocol::{Args, Resp};
 use rdma_rpc::Server;
 use rdma_rpc_core::server_stub::RpcHandler;
 use tracing::Level;
+use tracing_subscriber::EnvFilter;
 
 mod protocol;
 
@@ -41,6 +42,7 @@ impl KVRpcHandler {
 
 fn main() {
     tracing_subscriber::fmt::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
         .without_time()
         .with_max_level(Level::DEBUG)
         .init();
