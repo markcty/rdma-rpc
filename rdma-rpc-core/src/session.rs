@@ -5,12 +5,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use tracing::info;
 
 use crate::{error::Error, messages::Packet, transport::Transport};
-use tracing::{info, warn};
-use KRdmaKit::{
-    context::Context,
-    services_user::{self},
-    DatagramEndpoint, MemoryRegion, QueuePair, QueuePairBuilder,
-};
+use KRdmaKit::{context::Context, DatagramEndpoint, MemoryRegion, QueuePair, QueuePairBuilder};
 
 // for the MR, its layout is:
 // |0    ... 4096 | // send buffer
@@ -53,60 +48,26 @@ impl Session {
     fn get_session_addr(&self) -> usize {
         self.mr.get_virt_addr() as usize
     }
-    pub(crate) fn send_u8<T: Serialize>(&self, data: T) -> Result<u64, Error> {
-        let packet = Packet::new(self.id, data);
-        let send_buffer: &mut [u8] = unsafe {
-            alloc::slice::from_raw_parts_mut(self.get_session_addr() as _, DATA_SIZE as usize)
-        };
-        bincode::serialize_into(send_buffer, &packet)?;
-        let size = bincode::serialized_size(&packet)?;
-        self.transport.send_u8(&self.mr, 0, size)?;
+    pub(crate) fn send_u8<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
+        // TODO: devide data into multiple packets if needed
+        let packet = Packet::new(self.ack, self.syn, self.id, bincode::serialize(&data)?);
+        self.transport.send(packet.clone())?;
 
-        // loop {
-        //     let packet: Result<Packet<R>, Error> = self.transport.recv_fa();
-        //     match packet {
-        //         Ok(_pck) => {
-        //             break;
-        //         }
-        //         Err(Error::Receive) => {
-        //             continue;
-        //         }
-        //         Err(err) => {
-        //             return Err(err);
-        //         }
-        //     }
-        // }
-        Ok(size)
-    }
-    fn get_session_addr(&self) -> usize {
-        self.mr.get_virt_addr() as usize
-    }
-    pub(crate) fn send_u8<T: Serialize>(&self, data: T) -> Result<u64, Error> {
-        let packet = Packet::new(self.id, data);
-        let send_buffer: &mut [u8] = unsafe {
-            alloc::slice::from_raw_parts_mut(self.get_session_addr() as _, DATA_SIZE as usize)
-        };
-        bincode::serialize_into(send_buffer, &packet)?;
-        let size = bincode::serialized_size(&packet)?;
-        self.transport.send_u8(&self.mr, 0, size)?;
+        // wait until the packet is received by the remote
+        loop {
+            sleep_millis(10);
+            if let Some(packet) = self.transport.try_recv()? {
+                if packet.ack() == self.syn + 1 {
+                    info!("recv ack {}", packet.ack());
+                    self.syn += 1;
+                    break Ok(());
+                }
+            }
 
-        // loop {
-        //     let packet: Result<Packet<R>, Error> = self.transport.recv_fa();
-        //     match packet {
-        //         Ok(_pck) => {
-        //             break;
-        //         }
-        //         Err(Error::Receive) => {
-        //             continue;
-        //         }
-        //         Err(err) => {
-        //             return Err(err);
-        //         }
-        //     }
-        // }
-        Ok(size)
+            // resend
+            self.transport.send(packet.clone())?;
+        }
     }
-
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
         let packet = Packet::new(self.ack, self.syn, self.id, bincode::serialize(&data)?);
@@ -134,8 +95,6 @@ impl Session {
             // TODO: assemble the packets to R
             let packet = self.transport.recv()?;
             assert_eq!(packet.session_id(), self.id);
-            let resp_packet = Packet::new(packet.session_id(), [0u8; 0]);
-            // self.transport.send(resp_packet)?;
             match packet.syn().cmp(&self.ack) {
                 // probably the remote end did not received my last ack, resend ack
                 Ordering::Less => {

@@ -156,41 +156,6 @@ impl Transport {
 
         Ok(msg)
     }
-
-    pub(crate) fn recv_fa<R: DeserializeOwned>(&self) -> Result<Packet<R>, Error> {
-        // poll recv cq
-        let mut wcs = [Default::default()];
-        let res = {
-            let res = self
-                .qp
-                .poll_recv_cq(&mut wcs)
-                .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
-            if !res.is_empty() {
-                res
-            } else {
-                return Err(Error::Receive);
-            }
-        };
-        info!("transport recv packet");
-
-        // post recv
-        self.qp
-            .post_recv(&self.mr, BUF_SIZE..MR_SIZE, 1)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
-
-        // deserialize arg
-        assert!(res.len() == 1);
-        let msg_sz = res[0].byte_len as usize - UD_DATA_OFFSET;
-        let msg: Packet<R> = bincode::deserialize(unsafe {
-            alloc::slice::from_raw_parts(
-                (self.mr.get_virt_addr() as usize + BUF_SIZE as usize + UD_DATA_OFFSET) as *mut u8,
-                msg_sz,
-            )
-        })?;
-
-        Ok(msg)
-    }
-
     pub(crate) fn try_recv(&self) -> Result<Option<Packet>, Error> {
         // poll recv cq
         let mut wcs = [Default::default()];
