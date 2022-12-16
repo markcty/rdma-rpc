@@ -18,6 +18,8 @@ const PAKET_HEADER: usize = 256;
 const MESSAGE_CONTENT_SIZE: usize = 1;
 const ROUND_MAX: u32 = 500;
 const TIME_PER_ROUND: u32 = 10;
+const WINDOW_GAP_TIME: u32 = 2;
+const WINDOW_SIZE: usize = 2;
 /// Session provides send/receive between server/client
 /// Session should act like a stream. Users will read/write from this object.
 /// Should handle reorder and package loss.
@@ -143,50 +145,96 @@ impl Session {
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
         let data = bincode::serialize(&data)?;
+        let mut base = 0;
+        let mut upper = if MESSAGE_CONTENT_SIZE > data.len() {
+            data.len()
+        } else {
+            MESSAGE_CONTENT_SIZE
+        };
+        let mut round_cnt = ROUND_MAX;
+        let packet_total_num =
+            ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
         let mut send_packet = Packet::new(
             self.ack,
             self.syn,
             self.id,
-            data.clone()[0..MESSAGE_CONTENT_SIZE].try_into().unwrap(),
+            data.clone()[base..upper].try_into().unwrap(),
         );
-        let mut base = 0;
-        let mut upper = MESSAGE_CONTENT_SIZE;
-        let mut round_cnt = ROUND_MAX;
-        let packet_total_num =
-            ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
+        let mut waiting_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
+        let mut window_base: usize = 0;
+        let mut window_upper = if WINDOW_SIZE > packet_total_num as usize {
+            packet_total_num as usize
+        } else {
+            WINDOW_SIZE
+        };
+        let mut waiting_num: usize = window_upper;
         // wait until the packet is received by the remote
         warn!("starg sending, [packet num = {:?}]", packet_total_num);
         loop {
-            // info!("into loop");
             if round_cnt >= ROUND_MAX {
-                info!("send packet {:?}", &send_packet);
-                // resend
-                self.transport.send(send_packet.clone())?;
-                round_cnt = 0;
+                // over time
+                let mut send_flag = false;
+                for seq_num in window_base..window_upper {
+                    info!("waiting range = {:?}", waiting_range);
+                    // only re-send those still waiting
+                    if waiting_range[seq_num - window_base] {
+                        send_flag = true;
+                        sleep_millis(WINDOW_GAP_TIME);
+                        let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
+                        let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
+                        let cur_packet = Packet::new(
+                            0,
+                            seq_num as u64,
+                            self.id,
+                            data[down_bound..up_bound].try_into().unwrap(),
+                        );
+                        info!("send packet {:?}", &cur_packet);
+
+                        self.transport.send(cur_packet)?;
+                    }
+                }
+                if send_flag == false {
+                    window_base = window_upper;
+                    window_upper = if window_base + WINDOW_SIZE < packet_total_num as usize {
+                        window_base + WINDOW_SIZE
+                    } else {
+                        packet_total_num as usize
+                    };
+                    waiting_num = window_upper - window_base;
+                    waiting_range = [true; WINDOW_SIZE];
+                    round_cnt = ROUND_MAX;
+                    continue;
+                }
             }
             sleep_millis(TIME_PER_ROUND);
 
             if let Some(packet) = self.transport.try_recv()? {
-                if packet.ack() == self.syn + 1 {
+                // get one packet, check the ack number
+                let ack_num = packet.ack();
+                if window_base <= ack_num as usize
+                    && (ack_num as usize) < window_upper
+                    && waiting_range[ack_num as usize - window_base]
+                {
                     info!("recv ack {}", packet.ack());
-                    self.syn += 1;
-                    if self.syn >= packet_total_num {
-                        warn!("sending ended");
-                        break;
+                    waiting_num -= 1;
+                    waiting_range[ack_num as usize - window_base] = false;
+                    if waiting_num == 0 {
+                        if window_upper == packet_total_num as usize {
+                            warn!("sending ended");
+                            break;
+                        } else {
+                            window_base = window_upper;
+                            window_upper = if window_base + WINDOW_SIZE < packet_total_num as usize
+                            {
+                                window_base + WINDOW_SIZE
+                            } else {
+                                packet_total_num as usize
+                            };
+                            waiting_num = window_upper - window_base;
+                            waiting_range = [true; WINDOW_SIZE];
+                            round_cnt = ROUND_MAX;
+                        }
                     }
-                    base += MESSAGE_CONTENT_SIZE;
-                    upper = if base + MESSAGE_CONTENT_SIZE > data.len() {
-                        data.len()
-                    } else {
-                        base + MESSAGE_CONTENT_SIZE
-                    };
-                    send_packet = Packet::new(
-                        self.ack,
-                        self.syn,
-                        self.id,
-                        data[base..upper].try_into().unwrap(),
-                    );
-                    round_cnt = ROUND_MAX;
                 }
             }
             round_cnt += 1;
@@ -221,7 +269,12 @@ impl Session {
     pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
         warn!("start recv waiting");
         let mut buffer = BytesMut::with_capacity(DATA_SIZE);
-        let mut v_buffer = Vec::<u8>::new();
+        let mut window_base: usize = 0;
+        let mut window_upper: usize = window_base + WINDOW_SIZE;
+        let mut accept_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
+        let mut cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
+        let mut accept_left = WINDOW_SIZE;
+        // cur_buffer[0] = 8u8;
         loop {
             // TODO: assemble the packets to R
             let packet = self.transport.recv()?;
@@ -230,24 +283,30 @@ impl Session {
             if packet.FIN == 1 {
                 return Ok(bincode::deserialize(&buffer)?);
             }
-            match packet.syn().cmp(&self.ack) {
-                // probably the remote end did not received my last ack, resend ack
-                Ordering::Less => {
-                    self.transport
-                        .send(Packet::new_empty(self.ack, self.syn, self.id))?;
-                    info!("send back ack {}", self.ack);
+            let syn_num = packet.syn();
+            if window_base as u64 <= syn_num
+                && syn_num < window_upper as u64
+                && accept_range[(syn_num - window_base as u64) as usize]
+            {
+                accept_left -= 1;
+                accept_range[(syn_num - window_base as u64) as usize] = false;
+                assemble_cur_buffer(
+                    &mut cur_buffer,
+                    packet.data(),
+                    (syn_num - window_base as u64) as usize * MESSAGE_CONTENT_SIZE,
+                );
+                if accept_left == 0 {
+                    buffer.put(&cur_buffer[..]);
+                    window_base += WINDOW_SIZE;
+                    window_upper = window_base + WINDOW_SIZE;
+                    accept_range = [true; WINDOW_SIZE];
+                    accept_left = WINDOW_SIZE;
+                    cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
                 }
-                // packet is the expected one, return ack
-                Ordering::Equal => {
-                    self.ack += 1;
-                    self.transport
-                        .send(Packet::new_empty(self.ack, self.syn, self.id))?;
-                    info!("send back ack {}", self.ack);
-                    buffer.put(packet.data());
-                }
-                // do nothing wait for the remote to resend
-                Ordering::Greater => {}
             }
+            let resp = Packet::new_empty(syn_num, 0, self.id);
+            info!("reply with {:?}", resp);
+            self.transport.send(resp)?;
         }
     }
 }
