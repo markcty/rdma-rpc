@@ -13,7 +13,8 @@ impl ClientStub {
 
     pub fn sync_call<T: Serialize, R: DeserializeOwned>(&self, args: T) -> Result<R, Error> {
         // remote call
-        self.session.send(args)?;
+        // self.session.send(args)?;
+        self.session.send_u8(args)?;
         self.session.recv()
     }
 }
