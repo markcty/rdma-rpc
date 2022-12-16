@@ -169,7 +169,7 @@ impl Session {
         };
         let mut waiting_num: usize = window_upper;
         // wait until the packet is received by the remote
-        warn!("starg sending, [packet num = {:?}]", packet_total_num);
+        info!("starg sending, [packet num = {:?}]", packet_total_num);
         loop {
             if round_cnt >= ROUND_MAX {
                 // over time
@@ -220,7 +220,7 @@ impl Session {
                     waiting_range[ack_num as usize - window_base] = false;
                     if waiting_num == 0 {
                         if window_upper == packet_total_num as usize {
-                            warn!("sending ended");
+                            info!("sending ended");
                             break;
                         } else {
                             window_base = window_upper;
@@ -267,7 +267,7 @@ impl Session {
 
     /// Recv the next request
     pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
-        warn!("start recv waiting");
+        info!("start recv waiting");
         let mut buffer = BytesMut::with_capacity(DATA_SIZE);
         let mut window_base: usize = 0;
         let mut window_upper: usize = window_base + WINDOW_SIZE;
