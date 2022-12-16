@@ -100,6 +100,7 @@ impl Transport {
 
         Ok(())
     }
+    #[allow(unused)]
     pub(crate) fn send_u8(
         &self,
         mr: &MemoryRegion,

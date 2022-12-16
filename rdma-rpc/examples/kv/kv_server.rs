@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    thread, time,
+    thread,
     time::Duration,
 };
 

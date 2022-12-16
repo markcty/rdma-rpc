@@ -1,19 +1,19 @@
-use alloc::{format, string::ToString, sync::Arc};
-use core::cmp::Ordering;
-use libc::malloc;
+use alloc::{format, sync::Arc};
 
 use crate::{error::Error, messages::Packet, transport::Transport};
-use alloc::vec::Vec;
 use bytes::{BufMut, BytesMut};
 use serde::{de::DeserializeOwned, Serialize};
-use tracing::{info, warn};
-use KRdmaKit::{context::Context, DatagramEndpoint, MemoryRegion, QueuePair, QueuePairBuilder};
+use tracing::info;
+use KRdmaKit::{context::Context, MemoryRegion};
 
 // for the MR, its layout is:
 // |0    ... 4096 | // send buffer
 // |4096 ... 8192 | // receive buffer
+#[allow(unused)]
 const DATA_SIZE: usize = 4096;
+#[allow(unused)]
 const SESSION_START: usize = 2048;
+#[allow(unused)]
 const PAKET_HEADER: usize = 256;
 const MESSAGE_CONTENT_SIZE: usize = 1;
 const ROUND_MAX: u32 = 500;
@@ -31,6 +31,7 @@ pub struct Session {
     ack: u64,
 }
 
+#[allow(unused)]
 impl Session {
     // TODO: exchange ack and syn using tcp
     pub fn new(context: Arc<Context>, id: u64, transport: Transport) -> Self {
@@ -120,6 +121,7 @@ impl Session {
             .send(Packet::new_empty(self.ack, self.syn, self.id))?;
         Ok(())
     }
+
     fn recv_end(&mut self) -> Result<(), Error> {
         let empty_end_packet = Packet::new_empty(self.ack, self.syn, self.id);
         let mut round_cnt = ROUND_MAX;
@@ -244,6 +246,7 @@ impl Session {
         info!("send FIN send packet: {:?}", fin_packet);
         Ok(())
     }
+    #[allow(unused)]
     pub(crate) fn send_v0<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
         let packet = Packet::new(self.ack, self.syn, self.id, bincode::serialize(&data)?);
@@ -280,10 +283,10 @@ impl Session {
             let packet = self.transport.recv()?;
             assert_eq!(packet.session_id(), self.id);
             info!("get packet {:?}", &packet);
-            if packet.FIN == 1 {
+            if packet.fin == 1 {
                 return Ok(bincode::deserialize(&buffer)?);
             }
-            let syn_num = packet.syn();
+            let syn_num = packet.seq();
             if window_base as u64 <= syn_num
                 && syn_num < window_upper as u64
                 && accept_range[(syn_num - window_base as u64) as usize]

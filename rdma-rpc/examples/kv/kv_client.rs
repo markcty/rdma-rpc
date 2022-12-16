@@ -1,6 +1,3 @@
-use std::thread;
-use std::time::Duration;
-
 use rdma_rpc::Client;
 
 mod protocol;
