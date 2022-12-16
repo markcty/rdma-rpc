@@ -97,10 +97,6 @@ impl Transport {
                 error!("failed to post datagram: {err}");
                 Error::Internal(err.to_string())
             })?;
-        info!(
-            "transport send packet to remote qpn {:?}",
-            self.endpoint.qpn()
-        );
 
         Ok(())
     }
@@ -117,10 +113,6 @@ impl Transport {
                 error!("failed to post datagram: {err}");
                 Error::Internal(err.to_string())
             })?;
-        info!(
-            "transport send packet to remote qpn {:?}",
-            self.endpoint.qpn()
-        );
 
         Ok(())
     }
@@ -137,7 +129,7 @@ impl Transport {
                 break res;
             }
         };
-        info!("transport recv packet");
+        // info!("transport recv packet");
 
         // post recv
         self.qp
