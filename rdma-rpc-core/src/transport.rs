@@ -1,4 +1,4 @@
-use alloc::{format, string::ToString, sync::Arc};
+use alloc::{borrow::ToOwned, collections::BTreeMap, format, string::ToString, sync::Arc};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 use KRdmaKit::{
@@ -15,9 +15,54 @@ use crate::{
 // for the MR, its layout is:
 // |0    ... 4096 | // send buffer
 // |4096 ... 8192 | // receive buffer
-pub const BUF_SIZE: u64 = 4096; // 4KB
+const BUF_SIZE: u64 = 4096; // 4KB
 const MR_SIZE: u64 = BUF_SIZE * 2; // 8KB
 const UD_DATA_OFFSET: usize = 40; // For a UD message, the first 40 bytes are reserved for GRH
+
+struct MemoryRegionWrapper {
+    mr: Arc<MemoryRegion>,
+    used: bool, // whether it's being used now or free
+}
+
+struct MrPool {
+    mrs: BTreeMap<u32, MemoryRegionWrapper>,
+}
+
+impl MrPool {
+    fn new(context: Arc<Context>, num: u8) -> Result<Self, Error> {
+        let mut mrs = BTreeMap::new();
+        for i in 0..num {
+            let mr = Arc::new(
+                MemoryRegion::new(Arc::clone(&context), MR_SIZE as usize)
+                    .map_err(|err| Error::Internal(format!("failed to allocate MR, {err}")))?,
+            );
+            mrs.insert(i as u32, MemoryRegionWrapper { mr, used: false });
+        }
+        Ok(Self { mrs })
+    }
+
+    fn get_free_mr(&mut self) -> Option<(u32, Arc<MemoryRegion>)> {
+        let res = self
+            .mrs
+            .iter()
+            .find(|item| !item.1.used)
+            .map(|item| (item.0.to_owned(), Arc::clone(&item.1.mr)));
+        if let Some((id, _)) = &res {
+            self.mrs.get_mut(id).unwrap().used = true;
+        }
+        res
+    }
+
+    fn mark_mr_free(&mut self, id: u32) -> Result<(), Error> {
+        match self.mrs.get_mut(&id) {
+            Some(mr) => {
+                mr.used = false;
+                Ok(())
+            }
+            None => Err(Error::Internal(format!("mr of id {id} doesn't exist"))),
+        }
+    }
+}
 
 pub struct Transport {
     qp: Arc<QueuePair>,
