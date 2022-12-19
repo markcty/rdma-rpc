@@ -1,4 +1,6 @@
-use alloc::{borrow::ToOwned, collections::BTreeMap, format, string::ToString, sync::Arc};
+use alloc::{
+    borrow::ToOwned, collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 use KRdmaKit::{
@@ -12,12 +14,9 @@ use crate::{
     messages::{Packet, QPInfo},
 };
 
-// for the MR, its layout is:
-// |0    ... 4096 | // send buffer
-// |4096 ... 8192 | // receive buffer
 const BUF_SIZE: u64 = 4096; // 4KB
-const MR_SIZE: u64 = BUF_SIZE * 2; // 8KB
-const UD_DATA_OFFSET: usize = 40; // For a UD message, the first 40 bytes are reserved for GRH
+const UD_DATA_OFFSET: usize = 40; // for a UD message, the first 40 bytes are reserved for GRH
+const POOL_SIZE: u8 = 8; // how many mrs are in a mr pool
 
 struct MemoryRegionWrapper {
     mr: Arc<MemoryRegion>,
@@ -25,7 +24,7 @@ struct MemoryRegionWrapper {
 }
 
 struct MrPool {
-    mrs: BTreeMap<u32, MemoryRegionWrapper>,
+    mrs: BTreeMap<u64, MemoryRegionWrapper>,
 }
 
 impl MrPool {
@@ -33,15 +32,15 @@ impl MrPool {
         let mut mrs = BTreeMap::new();
         for i in 0..num {
             let mr = Arc::new(
-                MemoryRegion::new(Arc::clone(&context), MR_SIZE as usize)
+                MemoryRegion::new(Arc::clone(&context), BUF_SIZE as usize)
                     .map_err(|err| Error::Internal(format!("failed to allocate MR, {err}")))?,
             );
-            mrs.insert(i as u32, MemoryRegionWrapper { mr, used: false });
+            mrs.insert(i as u64, MemoryRegionWrapper { mr, used: false });
         }
         Ok(Self { mrs })
     }
 
-    fn get_free_mr(&mut self) -> Option<(u32, Arc<MemoryRegion>)> {
+    fn get_free_mr(&mut self) -> Option<(u64, Arc<MemoryRegion>)> {
         let res = self
             .mrs
             .iter()
@@ -53,7 +52,7 @@ impl MrPool {
         res
     }
 
-    fn mark_mr_free(&mut self, id: u32) -> Result<(), Error> {
+    fn mark_mr_free(&mut self, id: u64) -> Result<(), Error> {
         match self.mrs.get_mut(&id) {
             Some(mr) => {
                 mr.used = false;
@@ -62,12 +61,20 @@ impl MrPool {
             None => Err(Error::Internal(format!("mr of id {id} doesn't exist"))),
         }
     }
+
+    fn get_mr_with_id(&self, id: u64) -> Result<Arc<MemoryRegion>, Error> {
+        match self.mrs.get(&id) {
+            Some(mr) => Ok(Arc::clone(&mr.mr)),
+            None => Err(Error::Internal(format!("mr of id {id} doesn't exist"))),
+        }
+    }
 }
 
 pub struct Transport {
     qp: Arc<QueuePair>,
     endpoint: DatagramEndpoint,
-    mr: MemoryRegion,
+    send_mrs: MrPool,
+    recv_mrs: MrPool,
 }
 
 impl Transport {
@@ -92,14 +99,24 @@ impl Transport {
         .map_err(|_| Error::Internal("UD endpoint creation fails".to_string()))?;
 
         // create mr
-        let mr = MemoryRegion::new(Arc::clone(&context), MR_SIZE as usize)
-            .map_err(|err| Error::Internal(format!("failed to allocate MR, {err}")))?;
+        let send_mrs = MrPool::new(Arc::clone(&context), POOL_SIZE)?;
+        let mut recv_mrs = MrPool::new(context, POOL_SIZE)?;
 
         // init post recv
-        qp.post_recv(&mr, BUF_SIZE..MR_SIZE, 1)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        for _ in 0..POOL_SIZE {
+            let (id, mr) = recv_mrs
+                .get_free_mr()
+                .ok_or(Error::Internal("no available mr".to_string()))?;
+            qp.post_recv(&mr, 0..BUF_SIZE, id)
+                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        }
 
-        Ok(Self { qp, endpoint, mr })
+        Ok(Self {
+            qp,
+            endpoint,
+            send_mrs,
+            recv_mrs,
+        })
     }
 
     pub fn new_with_qp(
@@ -119,27 +136,50 @@ impl Transport {
         .map_err(|_| Error::Internal("UD endpoint creation fails".to_string()))?;
 
         // create mr
-        let mr = MemoryRegion::new(Arc::clone(&context), MR_SIZE as usize)
-            .map_err(|err| Error::Internal(format!("failed to allocate MR, {err}")))?;
+        let send_mrs = MrPool::new(Arc::clone(&context), POOL_SIZE)?;
+        let mut recv_mrs = MrPool::new(context, POOL_SIZE)?;
 
         // init post recv
-        qp.post_recv(&mr, BUF_SIZE..MR_SIZE, 1)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        for _ in 0..POOL_SIZE {
+            let (id, mr) = recv_mrs
+                .get_free_mr()
+                .ok_or(Error::Internal("no available mr".to_string()))?;
+            qp.post_recv(&mr, 0..BUF_SIZE, id)
+                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        }
 
-        Ok(Self { qp, endpoint, mr })
+        Ok(Self {
+            qp,
+            endpoint,
+            send_mrs,
+            recv_mrs,
+        })
     }
 
-    pub(crate) fn send<T: Serialize>(&self, packet: Packet<T>) -> Result<(), Error> {
+    pub(crate) fn send<T: Serialize>(&mut self, packet: Packet<T>) -> Result<(), Error> {
+        // poll send cq and update the mr status
+        let mut wcs = [Default::default()];
+        let res = self
+            .qp
+            .poll_send_cq(&mut wcs)
+            .map_err(|err| Error::Internal(format!("failed to poll send cq, {err}")))?;
+        for wc in res {
+            self.send_mrs.mark_mr_free(wc.wr_id)?;
+        }
+
         // serialize arg
-        let buffer: &mut [u8] = unsafe {
-            alloc::slice::from_raw_parts_mut(self.mr.get_virt_addr() as _, BUF_SIZE as usize)
-        };
+        let (id, mr) = self
+            .send_mrs
+            .get_free_mr()
+            .ok_or(Error::Internal("no available mr".to_string()))?;
+        let buffer: &mut [u8] =
+            unsafe { alloc::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize) };
         bincode::serialize_into(buffer, &packet)?;
         let size = bincode::serialized_size(&packet)?;
 
         // post send
         self.qp
-            .post_datagram(&self.endpoint, &self.mr, 0..size, 1, true)
+            .post_datagram(&self.endpoint, &mr, 0..size, id, true)
             .map_err(|err| {
                 error!("failed to post datagram: {err}");
                 Error::Internal(err.to_string())
@@ -152,7 +192,7 @@ impl Transport {
         Ok(())
     }
 
-    pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<Packet<R>, Error> {
+    pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<Vec<Packet<R>>, Error> {
         // poll recv cq
         let mut wcs = [Default::default()];
         let res = loop {
@@ -166,22 +206,26 @@ impl Transport {
         };
         info!("transport recv packet");
 
-        // post recv
-        self.qp
-            .post_recv(&self.mr, BUF_SIZE..MR_SIZE, 1)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        let mut packets = Vec::new();
+        for wc in res {
+            // deserialize arg
+            let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
+            let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
+            let msg: Packet<R> = bincode::deserialize(unsafe {
+                alloc::slice::from_raw_parts(
+                    (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
+                    msg_sz,
+                )
+            })?; // TODO: post recv when handle error
+            packets.push(msg);
 
-        // deserialize arg
-        assert!(res.len() == 1);
-        let msg_sz = res[0].byte_len as usize - UD_DATA_OFFSET;
-        let msg: Packet<R> = bincode::deserialize(unsafe {
-            alloc::slice::from_raw_parts(
-                (self.mr.get_virt_addr() as usize + BUF_SIZE as usize + UD_DATA_OFFSET) as *mut u8,
-                msg_sz,
-            )
-        })?;
+            // post recv
+            self.qp
+                .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
+                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        }
 
-        Ok(msg)
+        Ok(packets)
     }
 
     pub fn qp_info(&self) -> QPInfo {

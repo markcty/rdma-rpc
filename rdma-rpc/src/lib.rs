@@ -241,7 +241,7 @@ where
         })
     }
 
-    pub fn send(&self, args: T) -> Result<R, ClientError> {
+    pub fn send(&mut self, args: T) -> Result<R, ClientError> {
         Ok(self.client_stub.sync_call(args)?)
     }
 }
