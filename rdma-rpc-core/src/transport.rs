@@ -100,24 +100,6 @@ impl Transport {
 
         Ok(())
     }
-    #[allow(unused)]
-    pub(crate) fn send_u8(
-        &self,
-        mr: &MemoryRegion,
-        start_pos: u64,
-        end_pos: u64,
-    ) -> Result<(), Error> {
-        // post send
-        self.qp
-            .post_datagram(&self.endpoint, mr, start_pos..end_pos, 1, true)
-            .map_err(|err| {
-                error!("failed to post datagram: {err}");
-                Error::Internal(err.to_string())
-            })?;
-
-        Ok(())
-    }
-
     pub(crate) fn recv(&self) -> Result<Packet, Error> {
         // poll recv cq
         let mut wcs = [Default::default()];

@@ -37,7 +37,6 @@ impl Session {
         self.id
     }
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
-        // TODO: devide data into multiple packets if needed
         let data = bincode::serialize(&data)?;
 
         let mut round_cnt;
@@ -59,6 +58,7 @@ impl Session {
                 info!("waiting range = {:?}", waiting_range);
                 // only re-send those still waiting
                 if waiting_range[seq_num - window_base] {
+                    //TODO: set the first packet for sending packet len
                     sleep_millis(INTERVAL_ONE_WINDOW);
                     let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
                     let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
@@ -74,7 +74,7 @@ impl Session {
             }
 
             'listen: loop {
-                //todo: recv multi packets
+                //TODO: recv multi packets
                 // listen loop
                 if round_cnt >= ROUND_MAX {
                     // listening over time
@@ -127,7 +127,6 @@ impl Session {
     /// Recv the next request
     pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
         info!("start recv waiting");
-        // let mut buffer = BytesMut::with_capacity(DATA_SIZE);
         let mut buffer = Vec::new();
         let mut window_base: usize = 0;
         let mut window_upper: usize = window_base + WINDOW_SIZE;
@@ -149,7 +148,7 @@ impl Session {
             {
                 accept_left -= 1;
                 accept_range[(syn_num - window_base as u64) as usize] = false;
-                assemble_cur_buffer(
+                insert_buffer(
                     &mut buffer,
                     packet.data(),
                     (syn_num) as usize * MESSAGE_CONTENT_SIZE,
@@ -168,7 +167,7 @@ impl Session {
         }
     }
 }
-fn assemble_cur_buffer(data: &mut [u8], inner: &[u8], base: usize) {
+fn insert_buffer(data: &mut [u8], inner: &[u8], base: usize) {
     let len = inner.len();
     for i in 0..len {
         data[i + base] = inner[i];
