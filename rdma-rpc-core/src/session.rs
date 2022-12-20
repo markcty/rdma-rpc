@@ -1,10 +1,8 @@
-use alloc::{format, sync::Arc};
+use alloc::vec::Vec;
 
 use crate::{error::Error, messages::Packet, transport::Transport};
-use bytes::{BufMut, BytesMut};
 use serde::{de::DeserializeOwned, Serialize};
-use tracing::info;
-use KRdmaKit::{context::Context, MemoryRegion};
+use tracing::{info, warn};
 
 // for the MR, its layout is:
 // |0    ... 4096 | // send buffer
@@ -26,7 +24,7 @@ pub struct Session {
 
 impl Session {
     // TODO: exchange ack and syn using tcp
-    pub fn new(context: Arc<Context>, id: u64, transport: Transport) -> Self {
+    pub fn new(id: u64, transport: Transport) -> Self {
         Self {
             transport,
             id,
@@ -41,21 +39,10 @@ impl Session {
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
         let data = bincode::serialize(&data)?;
-        let mut base = 0;
-        let mut upper = if MESSAGE_CONTENT_SIZE > data.len() {
-            data.len()
-        } else {
-            MESSAGE_CONTENT_SIZE
-        };
-        let mut round_cnt = 0;
+
+        let mut round_cnt;
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
-        let mut send_packet = Packet::new(
-            self.ack,
-            self.syn,
-            self.id,
-            data.clone()[base..upper].try_into().unwrap(),
-        );
         let mut waiting_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
         let mut window_base: usize = 0;
         let mut window_upper = if WINDOW_SIZE > packet_total_num as usize {
@@ -68,12 +55,10 @@ impl Session {
         info!("starg sending, [packet num = {:?}]", packet_total_num);
         'send: loop {
             round_cnt = 0;
-            let mut send_flag = false;
             for seq_num in window_base..window_upper {
                 info!("waiting range = {:?}", waiting_range);
                 // only re-send those still waiting
                 if waiting_range[seq_num - window_base] {
-                    send_flag = true;
                     sleep_millis(INTERVAL_ONE_WINDOW);
                     let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
                     let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
@@ -122,13 +107,14 @@ impl Session {
                                     };
                                 waiting_num = window_upper - window_base;
                                 waiting_range = [true; WINDOW_SIZE];
+                                warn!("goto the next window");
                                 break 'listen;
                             }
                         }
                     }
                 }
+                round_cnt += 1;
             }
-            round_cnt += 1;
         }
         // in the end, send the FIN packet to server
         let fin_packet = Packet::new_fin(self.ack, self.syn, self.id);
@@ -140,19 +126,19 @@ impl Session {
     /// Recv the next request
     pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
         info!("start recv waiting");
-        let mut buffer = BytesMut::with_capacity(DATA_SIZE);
+        // let mut buffer = BytesMut::with_capacity(DATA_SIZE);
+        let mut buffer = Vec::new();
         let mut window_base: usize = 0;
         let mut window_upper: usize = window_base + WINDOW_SIZE;
         let mut accept_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
-        let mut cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
         let mut accept_left = WINDOW_SIZE;
-        // cur_buffer[0] = 8u8;
+        buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
         loop {
             // TODO: assemble the packets to R
             let packet = self.transport.recv()?;
             assert_eq!(packet.session_id(), self.id);
             info!("get packet {:?}", &packet);
-            if packet.fin == 1 {
+            if packet.fin() {
                 return Ok(bincode::deserialize(&buffer)?);
             }
             let syn_num = packet.seq();
@@ -163,17 +149,16 @@ impl Session {
                 accept_left -= 1;
                 accept_range[(syn_num - window_base as u64) as usize] = false;
                 assemble_cur_buffer(
-                    &mut cur_buffer,
+                    &mut buffer,
                     packet.data(),
-                    (syn_num - window_base as u64) as usize * MESSAGE_CONTENT_SIZE,
+                    (syn_num) as usize * MESSAGE_CONTENT_SIZE,
                 );
                 if accept_left == 0 {
-                    buffer.put(&cur_buffer[..]);
                     window_base += WINDOW_SIZE;
                     window_upper = window_base + WINDOW_SIZE;
                     accept_range = [true; WINDOW_SIZE];
                     accept_left = WINDOW_SIZE;
-                    cur_buffer = [0u8; WINDOW_SIZE * MESSAGE_CONTENT_SIZE];
+                    buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
                 }
             }
             let resp = Packet::new_empty(syn_num, 0, self.id);
