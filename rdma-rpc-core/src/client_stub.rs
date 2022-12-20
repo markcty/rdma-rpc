@@ -11,7 +11,7 @@ impl ClientStub {
         Self { session }
     }
 
-    pub fn sync_call<T: Serialize, R: DeserializeOwned>(&self, args: T) -> Result<R, Error> {
+    pub fn sync_call<T: Serialize, R: DeserializeOwned>(&mut self, args: T) -> Result<R, Error> {
         // remote call
         self.session.send(args)?;
         self.session.recv()

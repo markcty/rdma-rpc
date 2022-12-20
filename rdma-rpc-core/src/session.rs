@@ -1,3 +1,4 @@
+use alloc::vec;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{error::Error, messages::Packet, transport::Transport};
@@ -19,21 +20,26 @@ impl Session {
         self.id
     }
 
-    pub(crate) fn send<T: Serialize>(&self, data: T) -> Result<(), Error> {
+    pub(crate) fn send<T: Serialize>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
         let packet = Packet::new(self.id, data);
-        self.transport.send(packet)?;
+        let packets = vec![packet];
+        self.transport.send_all(packets)?;
         Ok(())
     }
 
     /// Return true if the packet is the expected one
     pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<R, Error> {
         // TODO: assemble the packets to R
-        let packet = self.transport.recv()?;
-        assert_eq!(packet.session_id(), self.id);
+        let packets = self.transport.recv()?;
 
+        for packet in &packets {
+            assert_eq!(packet.session_id(), self.id)
+        }
+
+        let res = packets.into_iter().next().unwrap();
         // TODO: handle reorder and lost
 
-        Ok(packet.into_inner())
+        Ok(res.into_inner())
     }
 }

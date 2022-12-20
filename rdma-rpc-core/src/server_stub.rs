@@ -26,7 +26,7 @@ where
         Self { session, handler }
     }
 
-    pub fn serve(self) -> ! {
+    pub fn serve(mut self) -> ! {
         loop {
             // validate the packet
             let args = match self.session.recv() {
