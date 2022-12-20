@@ -151,9 +151,9 @@ impl Transport {
         })
     }
 
-    pub(crate) fn send<T: Serialize>(&mut self, packet: Packet<T>) -> Result<(), Error> {
+    pub(crate) fn send<T: Serialize>(&mut self, packets: &[Packet<T>]) -> Result<usize, Error> {
         // poll send cq and update the mr status
-        let mut wcs = [Default::default()];
+        let mut wcs = [Default::default(); POOL_SIZE as usize];
         let res = self
             .qp
             .poll_send_cq(&mut wcs)
@@ -162,29 +162,31 @@ impl Transport {
             self.send_mrs.mark_mr_free(wc.wr_id)?;
         }
 
-        // serialize arg
-        let (id, mr) = self
-            .send_mrs
-            .get_free_mr()
-            .ok_or_else(|| Error::Internal("no available mr".to_string()))?;
-        let buffer: &mut [u8] =
-            unsafe { alloc::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize) };
-        bincode::serialize_into(buffer, &packet)?;
-        let size = bincode::serialized_size(&packet)?;
+        for (i, packet) in packets.iter().enumerate() {
+            if let Some((id, mr)) = self.send_mrs.get_free_mr() {
+                // serialize arg
+                let buffer: &mut [u8] = unsafe {
+                    alloc::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize)
+                };
+                bincode::serialize_into(buffer, packet)?;
+                let size = bincode::serialized_size(packet)?;
 
-        // post send
-        self.qp
-            .post_datagram(&self.endpoint, &mr, 0..size, id, true)
-            .map_err(|err| {
-                error!("failed to post datagram: {err}");
-                Error::Internal(err.to_string())
-            })?;
-        info!(
-            "transport send packet to remote qpn {:?}",
-            self.endpoint.qpn()
-        );
-
-        Ok(())
+                // post send
+                self.qp
+                    .post_datagram(&self.endpoint, &mr, 0..size, id, true)
+                    .map_err(|err| {
+                        error!("failed to post datagram: {err}");
+                        Error::Internal(err.to_string())
+                    })?;
+                info!(
+                    "transport send packet to remote qpn {:?}",
+                    self.endpoint.qpn()
+                );
+            } else {
+                return Ok(packets.len() - i); // such number of packets haven't been sent
+            }
+        }
+        Ok(0) // 0 means all packets have been sent (added to the SQ)
     }
 
     pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<Vec<Packet<R>>, Error> {
@@ -221,6 +223,18 @@ impl Transport {
         }
 
         Ok(packets)
+    }
+
+    pub(crate) fn send_all<T: Serialize>(&mut self, packets: Vec<Packet<T>>) -> Result<(), Error> {
+        let len = packets.len();
+        let mut left_to_be_sent: usize = len;
+
+        loop {
+            left_to_be_sent = self.send(&packets[len - left_to_be_sent..])?;
+            if left_to_be_sent == 0 {
+                break Ok(());
+            }
+        }
     }
 
     pub fn qp_info(&self) -> QPInfo {

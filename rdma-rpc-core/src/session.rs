@@ -1,3 +1,4 @@
+use alloc::vec;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{error::Error, messages::Packet, transport::Transport};
@@ -22,7 +23,8 @@ impl Session {
     pub(crate) fn send<T: Serialize>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
         let packet = Packet::new(self.id, data);
-        self.transport.send(packet)?;
+        let packets = vec![packet];
+        self.transport.send_all(packets)?;
         Ok(())
     }
 
