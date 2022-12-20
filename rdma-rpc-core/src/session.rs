@@ -1,4 +1,5 @@
 use alloc::vec;
+use alloc::vec::Vec;
 
 use crate::{error::Error, messages::Packet, transport::Transport};
 use serde::{de::DeserializeOwned, Serialize};
@@ -69,44 +70,8 @@ impl Session {
                         data[down_bound..up_bound].try_into().unwrap(),
                     );
                     info!("send packet {:?}", &cur_packet);
-                    self.transport.send(cur_packet)?;
-                }
-            }
-
-              pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
-        let data = bincode::serialize(&data)?;
-
-        let mut round_cnt;
-        let packet_total_num =
-            ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
-        let mut waiting_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
-        let mut window_base: usize = 0;
-        let mut window_upper = if WINDOW_SIZE > packet_total_num as usize {
-            packet_total_num as usize
-        } else {
-            WINDOW_SIZE
-        };
-        let mut waiting_num: usize = window_upper;
-        // wait until the packet is received by the remote
-        info!("starg sending, [packet num = {:?}]", packet_total_num);
-        'send: loop {
-            round_cnt = 0;
-            for seq_num in window_base..window_upper {
-                info!("waiting range = {:?}", waiting_range);
-                // only re-send those still waiting
-                if waiting_range[seq_num - window_base] {
-                    //TODO: set the first packet for sending packet len
-                    sleep_millis(INTERVAL_ONE_WINDOW);
-                    let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
-                    let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
-                    let cur_packet = Packet::new(
-                        0,
-                        seq_num as u64,
-                        self.id,
-                        data[down_bound..up_bound].try_into().unwrap(),
-                    );
-                    info!("send packet {:?}", &cur_packet);
-                    self.transport.send(cur_packet)?;
+                    let packets = vec![cur_packet];
+                    self.transport.send_all(packets)?;
                 }
             }
 
@@ -155,9 +120,8 @@ impl Session {
             }
         }
 
-                // in the end, send the FIN packet to server
+        // in the end, send the FIN packet to server
         let fin_packet = Packet::new_fin(self.ack, self.syn, self.id);
-        self.transport.send(fin_packet.clone())?;
         info!("send FIN send packet: {:?}", fin_packet);
         let packets = vec![fin_packet];
         self.transport.send_all(packets)?;
@@ -175,38 +139,43 @@ impl Session {
         buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
         loop {
             // TODO: assemble the packets to R
-            let packet = self.transport.recv()?;
-            assert_eq!(packet.session_id(), self.id);
-            info!("get packet {:?}", &packet);
-            if packet.fin() {
-                return Ok(bincode::deserialize(&buffer)?);
-            }
-            let syn_num = packet.seq();
-            if window_base as u64 <= syn_num
-                && syn_num < window_upper as u64
-                && accept_range[(syn_num - window_base as u64) as usize]
-            {
-                accept_left -= 1;
-                accept_range[(syn_num - window_base as u64) as usize] = false;
-                insert_buffer(
-                    &mut buffer,
-                    packet.data(),
-                    (syn_num) as usize * MESSAGE_CONTENT_SIZE,
-                );
-                if accept_left == 0 {
-                    window_base += WINDOW_SIZE;
-                    window_upper = window_base + WINDOW_SIZE;
-                    accept_range = [true; WINDOW_SIZE];
-                    accept_left = WINDOW_SIZE;
-                    buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
+            let packets = self.transport.recv()?;
+            for packet in packets {
+                assert_eq!(packet.session_id(), self.id);
+
+                info!("get packet {:?}", &packet);
+                if packet.fin() {
+                    return Ok(bincode::deserialize(&buffer)?);
                 }
+                let syn_num = packet.seq();
+                if window_base as u64 <= syn_num
+                    && syn_num < window_upper as u64
+                    && accept_range[(syn_num - window_base as u64) as usize]
+                {
+                    accept_left -= 1;
+                    accept_range[(syn_num - window_base as u64) as usize] = false;
+                    insert_buffer(
+                        &mut buffer,
+                        packet.data(),
+                        (syn_num) as usize * MESSAGE_CONTENT_SIZE,
+                    );
+                    if accept_left == 0 {
+                        window_base += WINDOW_SIZE;
+                        window_upper = window_base + WINDOW_SIZE;
+                        accept_range = [true; WINDOW_SIZE];
+                        accept_left = WINDOW_SIZE;
+                        buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
+                    }
+                }
+                let resp = Packet::new_empty(syn_num, 0, self.id);
+                info!("reply with {:?}", resp);
+                let resps = vec![resp];
+                self.transport.send_all(resps)?;
             }
-            let resp = Packet::new_empty(syn_num, 0, self.id);
-            info!("reply with {:?}", resp);
-            self.transport.send(resp)?;
         }
     }
 }
+
 fn insert_buffer(data: &mut [u8], inner: &[u8], base: usize) {
     let len = inner.len();
     for i in 0..len {
