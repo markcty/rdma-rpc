@@ -1,6 +1,4 @@
-use alloc::{
-    borrow::ToOwned, collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec,
-};
+use alloc::{collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 use KRdmaKit::{
@@ -41,15 +39,12 @@ impl MrPool {
     }
 
     fn get_free_mr(&mut self) -> Option<(u64, Arc<MemoryRegion>)> {
-        let res = self
-            .mrs
-            .iter()
-            .find(|item| !item.1.used)
-            .map(|item| (item.0.to_owned(), Arc::clone(&item.1.mr)));
-        if let Some((id, _)) = &res {
-            self.mrs.get_mut(id).unwrap().used = true;
-        }
-        res
+        self.mrs.iter_mut().find_map(|(id, mr)| {
+            (!mr.used).then(|| {
+                mr.used = true;
+                (*id, Arc::clone(&mr.mr))
+            })
+        })
     }
 
     fn mark_mr_free(&mut self, id: u64) -> Result<(), Error> {
@@ -106,7 +101,7 @@ impl Transport {
         for _ in 0..POOL_SIZE {
             let (id, mr) = recv_mrs
                 .get_free_mr()
-                .ok_or(Error::Internal("no available mr".to_string()))?;
+                .ok_or_else(|| Error::Internal("no available mr".to_string()))?;
             qp.post_recv(&mr, 0..BUF_SIZE, id)
                 .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
         }
@@ -143,7 +138,7 @@ impl Transport {
         for _ in 0..POOL_SIZE {
             let (id, mr) = recv_mrs
                 .get_free_mr()
-                .ok_or(Error::Internal("no available mr".to_string()))?;
+                .ok_or_else(|| Error::Internal("no available mr".to_string()))?;
             qp.post_recv(&mr, 0..BUF_SIZE, id)
                 .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
         }
@@ -171,7 +166,7 @@ impl Transport {
         let (id, mr) = self
             .send_mrs
             .get_free_mr()
-            .ok_or(Error::Internal("no available mr".to_string()))?;
+            .ok_or_else(|| Error::Internal("no available mr".to_string()))?;
         let buffer: &mut [u8] =
             unsafe { alloc::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize) };
         bincode::serialize_into(buffer, &packet)?;
@@ -194,7 +189,7 @@ impl Transport {
 
     pub(crate) fn recv<R: DeserializeOwned>(&self) -> Result<Vec<Packet<R>>, Error> {
         // poll recv cq
-        let mut wcs = [Default::default()];
+        let mut wcs = [Default::default(); POOL_SIZE as usize];
         let res = loop {
             let res = self
                 .qp
