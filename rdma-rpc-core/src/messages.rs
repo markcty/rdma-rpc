@@ -73,6 +73,6 @@ pub struct QPInfo {
 
 impl Display for QPInfo {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
