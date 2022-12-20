@@ -9,16 +9,10 @@ use KRdmaKit::{context::Context, MemoryRegion};
 // for the MR, its layout is:
 // |0    ... 4096 | // send buffer
 // |4096 ... 8192 | // receive buffer
-#[allow(unused)]
-const DATA_SIZE: usize = 4096;
-#[allow(unused)]
-const SESSION_START: usize = 2048;
-#[allow(unused)]
-const PAKET_HEADER: usize = 256;
 const MESSAGE_CONTENT_SIZE: usize = 1;
 const ROUND_MAX: u32 = 500;
-const TIME_PER_ROUND: u32 = 10;
-const WINDOW_GAP_TIME: u32 = 2;
+const INTERVAL_PER_ROUND: u32 = 10;
+const INTERVAL_ONE_WINDOW: u32 = 2;
 const WINDOW_SIZE: usize = 2;
 /// Session provides send/receive between server/client
 /// Session should act like a stream. Users will read/write from this object.
@@ -26,24 +20,16 @@ const WINDOW_SIZE: usize = 2;
 pub struct Session {
     transport: Transport,
     id: u64,
-    pub mr: MemoryRegion,
     syn: u64,
     ack: u64,
 }
 
-#[allow(unused)]
 impl Session {
     // TODO: exchange ack and syn using tcp
     pub fn new(context: Arc<Context>, id: u64, transport: Transport) -> Self {
-        // create mr
-        let mr = MemoryRegion::new(Arc::clone(&context), DATA_SIZE as usize)
-            .map_err(|err| Error::Internal(format!("failed to allocate MR, {err}")))
-            .unwrap();
-
         Self {
             transport,
             id,
-            mr,
             ack: 0,
             syn: 0,
         }
@@ -51,98 +37,6 @@ impl Session {
 
     pub fn id(&self) -> u64 {
         self.id
-    }
-    fn send_start(&mut self) -> Result<(), Error> {
-        let empty_packet = Packet::new_empty(self.ack, self.syn, self.id);
-        let mut round_cnt = ROUND_MAX;
-        loop {
-            if round_cnt >= ROUND_MAX {
-                info!("send end packet");
-                self.transport.send(empty_packet.clone())?;
-                round_cnt = 0;
-            }
-            sleep_millis(TIME_PER_ROUND);
-
-            if let Some(packet) = self.transport.try_recv()? {
-                if packet.ack() == self.syn + 1 {
-                    info!("recv ack {}", packet.ack());
-                    self.syn += 1;
-                    break;
-                }
-            }
-            round_cnt += 1;
-        }
-        Ok(())
-    }
-    fn recv_start(&mut self) -> Result<(), Error> {
-        let empty_packet = Packet::new_empty(self.ack, self.syn, self.id);
-        let mut round_cnt = ROUND_MAX;
-        loop {
-            if round_cnt >= ROUND_MAX {
-                info!("send end packet");
-                self.transport.send(empty_packet.clone())?;
-                round_cnt = 0;
-            }
-            sleep_millis(TIME_PER_ROUND);
-
-            if let Some(packet) = self.transport.try_recv()? {
-                if packet.ack() == self.syn + 1 {
-                    info!("recv ack {}", packet.ack());
-                    self.syn += 1;
-                    break;
-                }
-            }
-            round_cnt += 1;
-        }
-        Ok(())
-    }
-
-    fn send_end(&mut self) -> Result<(), Error> {
-        let empty_end_packet = Packet::new_empty(self.ack, self.syn, self.id);
-        let mut round_cnt = ROUND_MAX;
-        loop {
-            if round_cnt >= ROUND_MAX {
-                info!("send end packet");
-                self.transport.send(empty_end_packet.clone())?;
-                round_cnt = 0;
-            }
-            sleep_millis(TIME_PER_ROUND);
-
-            if let Some(packet) = self.transport.try_recv()? {
-                if packet.ack() == self.syn + 1 {
-                    info!("recv ack {}", packet.ack());
-                    self.syn += 1;
-                    break;
-                }
-            }
-            round_cnt += 1;
-        }
-        self.transport
-            .send(Packet::new_empty(self.ack, self.syn, self.id))?;
-        Ok(())
-    }
-
-    fn recv_end(&mut self) -> Result<(), Error> {
-        let empty_end_packet = Packet::new_empty(self.ack, self.syn, self.id);
-        let mut round_cnt = ROUND_MAX;
-        loop {
-            if round_cnt >= ROUND_MAX {
-                info!("send end packet");
-                self.transport.send(empty_end_packet.clone())?;
-                round_cnt = 0;
-            }
-            sleep_millis(TIME_PER_ROUND);
-
-            if let Some(packet) = self.transport.try_recv()? {
-                if packet.ack() == self.syn + 1 {
-                    info!("recv ack {}", packet.ack());
-                    self.syn += 1;
-                    break;
-                }
-            }
-            round_cnt += 1;
-        }
-        Ok(())
     }
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         // TODO: devide data into multiple packets if needed
@@ -153,7 +47,7 @@ impl Session {
         } else {
             MESSAGE_CONTENT_SIZE
         };
-        let mut round_cnt = ROUND_MAX;
+        let mut round_cnt = 0;
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
         let mut send_packet = Packet::new(
@@ -172,100 +66,75 @@ impl Session {
         let mut waiting_num: usize = window_upper;
         // wait until the packet is received by the remote
         info!("starg sending, [packet num = {:?}]", packet_total_num);
-        loop {
-            if round_cnt >= ROUND_MAX {
-                // over time
-                let mut send_flag = false;
-                for seq_num in window_base..window_upper {
-                    info!("waiting range = {:?}", waiting_range);
-                    // only re-send those still waiting
-                    if waiting_range[seq_num - window_base] {
-                        send_flag = true;
-                        sleep_millis(WINDOW_GAP_TIME);
-                        let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
-                        let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
-                        let cur_packet = Packet::new(
-                            0,
-                            seq_num as u64,
-                            self.id,
-                            data[down_bound..up_bound].try_into().unwrap(),
-                        );
-                        info!("send packet {:?}", &cur_packet);
-
-                        self.transport.send(cur_packet)?;
-                    }
-                }
-                if send_flag == false {
-                    window_base = window_upper;
-                    window_upper = if window_base + WINDOW_SIZE < packet_total_num as usize {
-                        window_base + WINDOW_SIZE
-                    } else {
-                        packet_total_num as usize
-                    };
-                    waiting_num = window_upper - window_base;
-                    waiting_range = [true; WINDOW_SIZE];
-                    round_cnt = ROUND_MAX;
-                    continue;
+        'send: loop {
+            round_cnt = 0;
+            let mut send_flag = false;
+            for seq_num in window_base..window_upper {
+                info!("waiting range = {:?}", waiting_range);
+                // only re-send those still waiting
+                if waiting_range[seq_num - window_base] {
+                    send_flag = true;
+                    sleep_millis(INTERVAL_ONE_WINDOW);
+                    let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
+                    let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
+                    let cur_packet = Packet::new(
+                        0,
+                        seq_num as u64,
+                        self.id,
+                        data[down_bound..up_bound].try_into().unwrap(),
+                    );
+                    info!("send packet {:?}", &cur_packet);
+                    self.transport.send(cur_packet)?;
                 }
             }
-            sleep_millis(TIME_PER_ROUND);
 
-            if let Some(packet) = self.transport.try_recv()? {
-                // get one packet, check the ack number
-                let ack_num = packet.ack();
-                if window_base <= ack_num as usize
-                    && (ack_num as usize) < window_upper
-                    && waiting_range[ack_num as usize - window_base]
-                {
-                    info!("recv ack {}", packet.ack());
-                    waiting_num -= 1;
-                    waiting_range[ack_num as usize - window_base] = false;
-                    if waiting_num == 0 {
-                        if window_upper == packet_total_num as usize {
-                            info!("sending ended");
-                            break;
-                        } else {
-                            window_base = window_upper;
-                            window_upper = if window_base + WINDOW_SIZE < packet_total_num as usize
-                            {
-                                window_base + WINDOW_SIZE
+            'listen: loop {
+                // listen loop
+                if round_cnt >= ROUND_MAX {
+                    // listening over time
+                    break;
+                }
+                sleep_millis(INTERVAL_PER_ROUND);
+                if let Some(packet) = self.transport.try_recv()? {
+                    // get one packet, check the ack number
+                    let ack_num = packet.ack();
+                    if window_base <= ack_num as usize
+                        && (ack_num as usize) < window_upper
+                        && waiting_range[ack_num as usize - window_base]
+                    {
+                        info!("recv ack {}", packet.ack());
+                        waiting_num -= 1;
+                        waiting_range[ack_num as usize - window_base] = false;
+                        if waiting_num == 0 {
+                            if window_upper == packet_total_num as usize {
+                                // all packets are done
+                                info!("sending ended");
+                                break 'send;
                             } else {
-                                packet_total_num as usize
-                            };
-                            waiting_num = window_upper - window_base;
-                            waiting_range = [true; WINDOW_SIZE];
-                            round_cnt = ROUND_MAX;
+                                // this window's packets are done
+                                // reset for the next window
+                                window_base = window_upper;
+                                window_upper =
+                                    if window_base + WINDOW_SIZE < packet_total_num as usize {
+                                        window_base + WINDOW_SIZE
+                                    } else {
+                                        packet_total_num as usize
+                                    };
+                                waiting_num = window_upper - window_base;
+                                waiting_range = [true; WINDOW_SIZE];
+                                break 'listen;
+                            }
                         }
                     }
                 }
             }
             round_cnt += 1;
         }
+        // in the end, send the FIN packet to server
         let fin_packet = Packet::new_fin(self.ack, self.syn, self.id);
         self.transport.send(fin_packet.clone())?;
         info!("send FIN send packet: {:?}", fin_packet);
         Ok(())
-    }
-    #[allow(unused)]
-    pub(crate) fn send_v0<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
-        // TODO: devide data into multiple packets if needed
-        let packet = Packet::new(self.ack, self.syn, self.id, bincode::serialize(&data)?);
-        self.transport.send(packet.clone())?;
-
-        // wait until the packet is received by the remote
-        loop {
-            sleep_millis(10);
-            if let Some(packet) = self.transport.try_recv()? {
-                if packet.ack() == self.syn + 1 {
-                    info!("recv ack {}", packet.ack());
-                    self.syn += 1;
-                    break Ok(());
-                }
-            }
-
-            // resend
-            self.transport.send(packet.clone())?;
-        }
     }
 
     /// Recv the next request

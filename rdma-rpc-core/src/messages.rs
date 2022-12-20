@@ -9,9 +9,7 @@ use KRdmaKit::services_user::ibv_gid_wrapper;
 pub(crate) struct Packet {
     ack_num: u64,
     seq_num: u64,
-    pub fin: u8,
-    pub syn: u8,
-    pub ack: u8,
+    fin: bool,
     session_id: u64,
     data: Vec<u8>, // typically: this should be Vec<u8>
 }
@@ -21,9 +19,7 @@ impl Packet {
         Packet {
             ack_num: ack,
             seq_num: syn,
-            fin: 0,
-            syn: 0,
-            ack: 0,
+            fin: false,
             session_id,
             data: Vec::new(),
         }
@@ -32,9 +28,7 @@ impl Packet {
         Packet {
             ack_num: ack,
             seq_num: syn,
-            fin: 1,
-            syn: 0,
-            ack: 0,
+            fin: true,
             session_id,
             data: Vec::new(),
         }
@@ -44,9 +38,7 @@ impl Packet {
         Self {
             ack_num: ack,
             seq_num: syn,
-            fin: 0,
-            syn: 0,
-            ack: 0,
+            fin: false,
             session_id,
             data,
         }
@@ -63,9 +55,8 @@ impl Packet {
     pub(crate) fn seq(&self) -> u64 {
         self.seq_num
     }
-    #[allow(unused)]
-    pub(crate) fn raw_data(&self) -> Vec<u8> {
-        self.data.clone()
+    pub(crate) fn fin(&self) -> bool {
+        self.fin
     }
     pub(crate) fn data(&self) -> &[u8] {
         self.data.as_slice()
