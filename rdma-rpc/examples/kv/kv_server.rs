@@ -1,8 +1,6 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    thread,
-    time::Duration,
 };
 
 use protocol::{Args, Resp};
@@ -23,7 +21,6 @@ impl RpcHandler for KVRpcHandler {
     type Resp = Resp;
 
     fn handle(&self, arg: Self::Args) -> Self::Resp {
-        thread::sleep(Duration::from_millis(200));
         let mut store = self.store.lock().unwrap();
         match arg {
             Args::Get(k) => Resp::Get(store.get(&k).cloned()),
@@ -46,7 +43,6 @@ impl KVRpcHandler {
 fn main() {
     tracing_subscriber::fmt::fmt()
         .with_env_filter(EnvFilter::from_default_env())
-        .without_time()
         .with_max_level(Level::DEBUG)
         .init();
     Server::new(

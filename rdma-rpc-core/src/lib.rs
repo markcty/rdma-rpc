@@ -9,6 +9,7 @@ pub mod messages;
 pub mod server_stub;
 pub mod session;
 pub mod transport;
+pub(crate) mod utils;
 
 #[cfg(test)]
 mod tests {

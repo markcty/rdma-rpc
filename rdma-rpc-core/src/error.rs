@@ -13,6 +13,8 @@ pub enum Error {
     Internal(String),
     #[error("receive error")]
     Receive,
+    #[error("timeout")]
+    Timeout,
 }
 
 impl From<bincode::Error> for Error {

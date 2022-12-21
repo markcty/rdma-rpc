@@ -1,5 +1,5 @@
 use alloc::{collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use KRdmaKit::{
     context::Context,
     services_user::{self},
@@ -12,6 +12,7 @@ use crate::{
 };
 const BUF_SIZE: u64 = 4096; // 4KB
 const UD_DATA_OFFSET: usize = 40; // for a UD message, the first 40 bytes are reserved for GRH
+pub(crate) const MAX_PACKET_BYTES: usize = BUF_SIZE as usize - UD_DATA_OFFSET;
 const POOL_SIZE: u8 = 8; // how many mrs are in a mr pool
 
 struct MemoryRegionWrapper {
@@ -170,16 +171,13 @@ impl Transport {
                 let size = bincode::serialized_size(packet)?;
 
                 // post send
+                debug!("send 1 packet");
                 self.qp
                     .post_datagram(&self.endpoint, &mr, 0..size, id, true)
                     .map_err(|err| {
                         error!("failed to post datagram: {err}");
                         Error::Internal(err.to_string())
                     })?;
-                info!(
-                    "transport send packet to remote qpn {:?}",
-                    self.endpoint.qpn()
-                );
             } else {
                 return Ok(packets.len() - i); // such number of packets haven't been sent
             }
@@ -199,7 +197,6 @@ impl Transport {
                 break res;
             }
         };
-        // info!("transport recv packet");
 
         let mut packets = Vec::new();
         for wc in res {
@@ -220,9 +217,12 @@ impl Transport {
                 .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
         }
 
+        debug!("recv {} packets", packets.len());
+
         Ok(packets)
     }
-    pub(crate) fn send_all(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
+
+    pub(crate) fn send_burst(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
         let len = packets.len();
         let mut left_to_be_sent: usize = len;
 
@@ -252,7 +252,7 @@ impl Transport {
                     (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
                     msg_sz,
                 )
-            })?; // TODO: post recv when handle error
+            })?;
             packets.push(msg);
 
             // post recv

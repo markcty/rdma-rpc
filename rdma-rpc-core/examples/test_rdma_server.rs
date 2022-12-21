@@ -1,6 +1,5 @@
 use std::env;
 
-use log::info;
 use KRdmaKit::*;
 
 const IB_PORT: u8 = 1;

@@ -122,7 +122,7 @@ where
             info!("client qp info: {client_qp_info}");
 
             // create transport and self qp_info
-            let transport = match Transport::new(Arc::clone(&context), client_qp_info, ib_port) {
+            let transport = match Transport::new(context, client_qp_info, ib_port) {
                 Ok(transport) => transport,
                 Err(e) => {
                     warn!("failed to create transport for client, {e}");
