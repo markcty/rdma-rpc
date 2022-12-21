@@ -31,13 +31,16 @@ pub enum WindowStatus {
     Continue,
 }
 
+#[derive(Debug)]
 pub struct Window {
     total_packet_num: u64,
+    seq_num_upper_bound: u64,
     window_base: usize,
     window_upper: usize,
     waiting_range: [bool; WINDOW_SIZE],
     cur_waiting_num: usize,
 }
+
 impl Window {
     pub fn new(init_num: usize, packet_num: u64) -> Self {
         let upper = if WINDOW_SIZE > packet_num as usize {
@@ -47,6 +50,7 @@ impl Window {
         };
         Self {
             total_packet_num: packet_num,
+            seq_num_upper_bound: init_num as u64 + packet_num,
             window_base: init_num,
             window_upper: init_num + upper,
             waiting_range: [true; WINDOW_SIZE],
@@ -63,7 +67,6 @@ impl Window {
             info!("waiting range = {:?}", self.waiting_range);
             // only re-send those still waiting
             if self.waiting_range[seq_num - self.window_base] {
-                //TODO: set the first packet for sending packet len
                 sleep_millis(INTERVAL_ONE_WINDOW);
                 let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
                 let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
@@ -96,7 +99,7 @@ impl Window {
                     self.cur_waiting_num -= 1;
                     self.waiting_range[ack_num as usize - self.window_base] = false;
                     if self.cur_waiting_num == 0 {
-                        if self.window_upper == self.total_packet_num as usize {
+                        if self.window_upper == self.seq_num_upper_bound as usize {
                             // all packets are done
                             info!("sending ended");
                             return Ok(WindowStatus::SendFinished);
@@ -107,6 +110,12 @@ impl Window {
                             return Ok(WindowStatus::CurrentWindowDone);
                         }
                     }
+                } else {
+                    let seq_num = packet.seq();
+                    if seq_num >= self.seq_num_upper_bound && ack_num == 0 {
+                        // server start to resend resp data
+                        return Ok(WindowStatus::SendFinished);
+                    }
                 }
             }
         }
@@ -114,10 +123,10 @@ impl Window {
     }
     fn reset_next_window(&mut self) {
         self.window_base = self.window_upper;
-        self.window_upper = if self.window_base + WINDOW_SIZE < self.total_packet_num as usize {
+        self.window_upper = if self.window_base + WINDOW_SIZE < self.seq_num_upper_bound as usize {
             self.window_base + WINDOW_SIZE
         } else {
-            self.total_packet_num as usize
+            self.seq_num_upper_bound as usize
         };
         self.cur_waiting_num = self.window_upper - self.window_base;
         self.waiting_range = [true; WINDOW_SIZE];
@@ -144,7 +153,7 @@ impl Session {
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
         let mut send_window = Window::new(self.syn as usize, packet_total_num);
-
+        info!("get the window {:?}", send_window);
         // wait until the packet is received by the remote
         info!("starg sending, [packet num = {:?}]", packet_total_num);
         'send: loop {
@@ -161,7 +170,10 @@ impl Session {
                 sleep_millis(INTERVAL_PER_ROUND);
                 match send_window.sender_recv(&mut self.transport) {
                     Ok(WindowStatus::CurrentWindowDone) => break 'listen,
-                    Ok(WindowStatus::SendFinished) => break 'send,
+                    Ok(WindowStatus::SendFinished) => {
+                        info!("sender finished");
+                        break 'send;
+                    }
                     _ => {}
                 };
                 round_cnt += 1;
