@@ -1,5 +1,4 @@
 use alloc::{collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec};
-use serde::{de::DeserializeOwned, Serialize};
 use tracing::{error, info};
 use KRdmaKit::{
     context::Context,
@@ -11,7 +10,6 @@ use crate::{
     error::Error,
     messages::{Packet, QPInfo},
 };
-const MR_SIZE: u64 = BUF_SIZE * 2; // 8KB
 const BUF_SIZE: u64 = 4096; // 4KB
 const UD_DATA_OFFSET: usize = 40; // for a UD message, the first 40 bytes are reserved for GRH
 const POOL_SIZE: u8 = 8; // how many mrs are in a mr pool
@@ -236,37 +234,39 @@ impl Transport {
             }
         }
     }
-    pub(crate) fn try_recv(&self) -> Result<Option<Packet>, Error> {
-        // poll recv cq
-        let mut wcs = [Default::default()];
 
+    pub(crate) fn try_recv(&self) -> Result<Vec<Packet>, Error> {
+        // poll recv cq
+        let mut wcs = [Default::default(); POOL_SIZE as usize];
         let res = self
             .qp
             .poll_recv_cq(&mut wcs)
             .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
-        if res.is_empty() {
-            return Ok(None);
+        if !res.is_empty() {
+            return Ok(Vec::new());
         }
 
-        info!("transport try recv succeeded");
+        // info!("transport recv packet");
 
-        // post recv
-        self.qp
-            .post_recv(&self.mr, BUF_SIZE..MR_SIZE, 1)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        let mut packets = Vec::new();
+        for wc in res {
+            // deserialize arg
+            let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
+            let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
+            let msg: Packet = bincode::deserialize(unsafe {
+                alloc::slice::from_raw_parts(
+                    (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
+                    msg_sz,
+                )
+            })?; // TODO: post recv when handle error
+            packets.push(msg);
 
-        // deserialize arg
-        assert!(res.len() == 1);
-        let msg_sz = res[0].byte_len as usize - UD_DATA_OFFSET;
-        let msg = bincode::deserialize(unsafe {
-            alloc::slice::from_raw_parts(
-                //TODO: fix this bug
-                (self.mr.get_virt_addr() as usize + BUF_SIZE as usize + UD_DATA_OFFSET) as *mut u8,
-                msg_sz,
-            )
-        })?;
-
-        Ok(Some(msg))
+            // post recv
+            self.qp
+                .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
+                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        }
+        Ok(packets)
     }
 
     pub fn qp_info(&self) -> QPInfo {

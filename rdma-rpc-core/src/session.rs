@@ -83,35 +83,40 @@ impl Session {
                     break;
                 }
                 sleep_millis(INTERVAL_PER_ROUND);
-                if let Some(packet) = self.transport.try_recv()? {
-                    // get one packet, check the ack number
-                    let ack_num = packet.ack();
-                    if window_base <= ack_num as usize
-                        && (ack_num as usize) < window_upper
-                        && waiting_range[ack_num as usize - window_base]
-                    {
-                        info!("recv ack {}", packet.ack());
-                        waiting_num -= 1;
-                        waiting_range[ack_num as usize - window_base] = false;
-                        if waiting_num == 0 {
-                            if window_upper == packet_total_num as usize {
-                                // all packets are done
-                                info!("sending ended");
-                                break 'send;
-                            } else {
-                                // this window's packets are done
-                                // reset for the next window
-                                window_base = window_upper;
-                                window_upper =
-                                    if window_base + WINDOW_SIZE < packet_total_num as usize {
-                                        window_base + WINDOW_SIZE
-                                    } else {
-                                        packet_total_num as usize
-                                    };
-                                waiting_num = window_upper - window_base;
-                                waiting_range = [true; WINDOW_SIZE];
-                                warn!("goto the next window");
-                                break 'listen;
+                let packets = self.transport.try_recv()?;
+                if packets.len() != 0 {
+                    info!("packets len = {:?}", packets.len());
+                    for packet in packets {
+                        // get one packet, check the ack number
+                        let ack_num = packet.ack();
+                        if window_base <= ack_num as usize
+                            && (ack_num as usize) < window_upper
+                            && waiting_range[ack_num as usize - window_base]
+                        {
+                            info!("recv ack {}", packet.ack());
+                            waiting_num -= 1;
+                            waiting_range[ack_num as usize - window_base] = false;
+                            if waiting_num == 0 {
+                                if window_upper == packet_total_num as usize {
+                                    // all packets are done
+                                    info!("sending ended");
+                                    break 'send;
+                                } else {
+                                    // this window's packets are done
+                                    // reset for the next window
+
+                                    window_base = window_upper;
+                                    window_upper =
+                                        if window_base + WINDOW_SIZE < packet_total_num as usize {
+                                            window_base + WINDOW_SIZE
+                                        } else {
+                                            packet_total_num as usize
+                                        };
+                                    waiting_num = window_upper - window_base;
+                                    waiting_range = [true; WINDOW_SIZE];
+                                    warn!("goto the next window");
+                                    break 'listen;
+                                }
                             }
                         }
                     }
