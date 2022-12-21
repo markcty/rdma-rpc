@@ -23,6 +23,107 @@ pub struct Session {
     ack: u64,
 }
 
+#[derive(Debug)]
+pub enum WindowStatus {
+    SendFinished,
+    RecvFinished,
+    CurrentWindowDone,
+    Continue,
+}
+
+pub struct Window {
+    total_packet_num: u64,
+    window_base: usize,
+    window_upper: usize,
+    waiting_range: [bool; WINDOW_SIZE],
+    cur_waiting_num: usize,
+}
+impl Window {
+    pub fn new(init_num: usize, packet_num: u64) -> Self {
+        let upper = if WINDOW_SIZE > packet_num as usize {
+            packet_num as usize
+        } else {
+            WINDOW_SIZE
+        };
+        Self {
+            total_packet_num: packet_num,
+            window_base: init_num,
+            window_upper: init_num + upper,
+            waiting_range: [true; WINDOW_SIZE],
+            cur_waiting_num: upper,
+        }
+    }
+    pub fn send_packets(
+        &self,
+        data: &Vec<u8>,
+        transport: &mut Transport,
+        session_id: u64,
+    ) -> Result<(), Error> {
+        for seq_num in self.window_base..self.window_upper {
+            info!("waiting range = {:?}", self.waiting_range);
+            // only re-send those still waiting
+            if self.waiting_range[seq_num - self.window_base] {
+                //TODO: set the first packet for sending packet len
+                sleep_millis(INTERVAL_ONE_WINDOW);
+                let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
+                let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
+                let cur_packet = Packet::new(
+                    0,
+                    seq_num as u64,
+                    session_id,
+                    data[down_bound..up_bound].try_into().unwrap(),
+                    self.total_packet_num,
+                );
+                info!("send packet {:?}", &cur_packet);
+                let packets = vec![cur_packet];
+                transport.send_all(packets)?;
+            }
+        }
+        Ok(())
+    }
+    pub fn sender_recv(&mut self, transport: &mut Transport) -> Result<WindowStatus, Error> {
+        let packets = transport.try_recv()?;
+        if packets.len() != 0 {
+            info!("packets len = {:?}", packets.len());
+            for packet in packets {
+                // get one packet, check the ack number
+                let ack_num = packet.ack();
+                if self.window_base <= ack_num as usize
+                    && (ack_num as usize) < self.window_upper
+                    && self.waiting_range[ack_num as usize - self.window_base]
+                {
+                    info!("recv ack {}", packet.ack());
+                    self.cur_waiting_num -= 1;
+                    self.waiting_range[ack_num as usize - self.window_base] = false;
+                    if self.cur_waiting_num == 0 {
+                        if self.window_upper == self.total_packet_num as usize {
+                            // all packets are done
+                            info!("sending ended");
+                            return Ok(WindowStatus::SendFinished);
+                        } else {
+                            // this window's packets are done
+                            // reset for the next window
+                            self.reset_next_window();
+                            return Ok(WindowStatus::CurrentWindowDone);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(WindowStatus::Continue)
+    }
+    fn reset_next_window(&mut self) {
+        self.window_base = self.window_upper;
+        self.window_upper = if self.window_base + WINDOW_SIZE < self.total_packet_num as usize {
+            self.window_base + WINDOW_SIZE
+        } else {
+            self.total_packet_num as usize
+        };
+        self.cur_waiting_num = self.window_upper - self.window_base;
+        self.waiting_range = [true; WINDOW_SIZE];
+        info!("goto the next window");
+    }
+}
 impl Session {
     // TODO: exchange ack and syn using tcp
     pub fn new(id: u64, transport: Transport) -> Self {
@@ -37,46 +138,18 @@ impl Session {
     pub fn id(&self) -> u64 {
         self.id
     }
-    // fn send_num(&mut self,total_num:u32){
-
-    // }
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         let data = bincode::serialize(&data)?;
-
         let mut round_cnt;
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
-        let mut waiting_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
-        let mut window_base: usize = 0;
-        let mut window_upper = if WINDOW_SIZE > packet_total_num as usize {
-            packet_total_num as usize
-        } else {
-            WINDOW_SIZE
-        };
-        let mut waiting_num: usize = window_upper;
+        let mut send_window = Window::new(self.syn as usize, packet_total_num);
+
         // wait until the packet is received by the remote
         info!("starg sending, [packet num = {:?}]", packet_total_num);
         'send: loop {
             round_cnt = 0;
-            for seq_num in window_base..window_upper {
-                info!("waiting range = {:?}", waiting_range);
-                // only re-send those still waiting
-                if waiting_range[seq_num - window_base] {
-                    //TODO: set the first packet for sending packet len
-                    sleep_millis(INTERVAL_ONE_WINDOW);
-                    let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
-                    let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
-                    let cur_packet = Packet::new(
-                        0,
-                        seq_num as u64,
-                        self.id,
-                        data[down_bound..up_bound].try_into().unwrap(),
-                    );
-                    info!("send packet {:?}", &cur_packet);
-                    let packets = vec![cur_packet];
-                    self.transport.send_all(packets)?;
-                }
-            }
+            send_window.send_packets(&data, &mut self.transport, self.id)?;
 
             'listen: loop {
                 //TODO: recv multi packets
@@ -86,53 +159,14 @@ impl Session {
                     break;
                 }
                 sleep_millis(INTERVAL_PER_ROUND);
-                let packets = self.transport.try_recv()?;
-                if packets.len() != 0 {
-                    info!("packets len = {:?}", packets.len());
-                    for packet in packets {
-                        // get one packet, check the ack number
-                        let ack_num = packet.ack();
-                        if window_base <= ack_num as usize
-                            && (ack_num as usize) < window_upper
-                            && waiting_range[ack_num as usize - window_base]
-                        {
-                            info!("recv ack {}", packet.ack());
-                            waiting_num -= 1;
-                            waiting_range[ack_num as usize - window_base] = false;
-                            if waiting_num == 0 {
-                                if window_upper == packet_total_num as usize {
-                                    // all packets are done
-                                    info!("sending ended");
-                                    break 'send;
-                                } else {
-                                    // this window's packets are done
-                                    // reset for the next window
-
-                                    window_base = window_upper;
-                                    window_upper =
-                                        if window_base + WINDOW_SIZE < packet_total_num as usize {
-                                            window_base + WINDOW_SIZE
-                                        } else {
-                                            packet_total_num as usize
-                                        };
-                                    waiting_num = window_upper - window_base;
-                                    waiting_range = [true; WINDOW_SIZE];
-                                    warn!("goto the next window");
-                                    break 'listen;
-                                }
-                            }
-                        }
-                    }
-                }
+                match send_window.sender_recv(&mut self.transport) {
+                    Ok(WindowStatus::CurrentWindowDone) => break 'listen,
+                    Ok(WindowStatus::SendFinished) => break 'send,
+                    _ => {}
+                };
                 round_cnt += 1;
             }
         }
-
-        // in the end, send the FIN packet to server
-        let fin_packet = Packet::new_fin(self.ack, self.syn, self.id);
-        info!("send FIN send packet: {:?}", fin_packet);
-        let packets = vec![fin_packet];
-        self.transport.send_all(packets)?;
         Ok(())
     }
 
@@ -144,22 +178,24 @@ impl Session {
         let mut window_upper: usize = window_base + WINDOW_SIZE;
         let mut accept_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
         let mut accept_left = WINDOW_SIZE;
+        let mut total_packet_num: u64 = 0;
+        let mut recevied_packet_num: u64 = 0;
         buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
-        loop {
+        'listen: loop {
             // TODO: assemble the packets to R
             let packets = self.transport.recv()?;
             for packet in packets {
                 assert_eq!(packet.session_id(), self.id);
-
-                info!("get packet {:?}", &packet);
-                if packet.fin() {
-                    return Ok(bincode::deserialize(&buffer)?);
+                if total_packet_num == 0 {
+                    total_packet_num = packet.total_num();
                 }
+                info!("get packet {:?}", &packet);
                 let syn_num = packet.seq();
                 if window_base as u64 <= syn_num
                     && syn_num < window_upper as u64
                     && accept_range[(syn_num - window_base as u64) as usize]
                 {
+                    recevied_packet_num += 1;
                     accept_left -= 1;
                     accept_range[(syn_num - window_base as u64) as usize] = false;
                     insert_buffer(
@@ -167,6 +203,13 @@ impl Session {
                         packet.data(),
                         (syn_num) as usize * MESSAGE_CONTENT_SIZE,
                     );
+                    if recevied_packet_num == total_packet_num {
+                        let resp = Packet::new_empty(syn_num, 0, self.id);
+                        info!("reply with {:?}", resp);
+                        let resps = vec![resp];
+                        self.transport.send_all(resps)?;
+                        break 'listen;
+                    }
                     if accept_left == 0 {
                         window_base += WINDOW_SIZE;
                         window_upper = window_base + WINDOW_SIZE;
@@ -181,6 +224,7 @@ impl Session {
                 self.transport.send_all(resps)?;
             }
         }
+        Ok(bincode::deserialize(&buffer)?)
     }
 }
 
