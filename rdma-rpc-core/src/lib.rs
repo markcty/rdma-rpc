@@ -1,4 +1,6 @@
 #![no_std]
+#![feature(slice_as_chunks)]
+#![feature(let_chains)]
 
 extern crate alloc;
 

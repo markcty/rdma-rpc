@@ -12,6 +12,8 @@ use crate::{
 };
 const BUF_SIZE: u64 = 4096; // 4KB
 const UD_DATA_OFFSET: usize = 40; // for a UD message, the first 40 bytes are reserved for GRH
+                                  // pub(crate) const MAX_PACKET_BYTES: usize = BUF_SIZE as usize - UD_DATA_OFFSET;
+pub(crate) const MAX_PACKET_BYTES: usize = 1;
 const POOL_SIZE: u8 = 8; // how many mrs are in a mr pool
 
 struct MemoryRegionWrapper {
@@ -222,7 +224,8 @@ impl Transport {
 
         Ok(packets)
     }
-    pub(crate) fn send_all(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
+
+    pub(crate) fn send_burst(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
         let len = packets.len();
         let mut left_to_be_sent: usize = len;
 

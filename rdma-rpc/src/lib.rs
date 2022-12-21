@@ -102,23 +102,15 @@ where
             let session_id = rand::random();
 
             // receive QPInfo from stream
-            let mut buf = [0; 1024];
-            let size = match stream.read(&mut buf) {
-                Ok(size) => size,
-                Err(err) => {
-                    warn!("failed to read qp info from client, {err}");
-                    warn!("closing session {session_id}");
-                    return;
-                }
-            };
-            let client_qp_info: QPInfo = match bincode::deserialize(&buf[0..size]) {
-                Ok(qp_info) => qp_info,
-                Err(err) => {
-                    warn!("failed to deserialize client qp info, {err}");
-                    warn!("closing session {session_id}");
-                    return;
-                }
-            };
+            let client_qp_info: QPInfo =
+                match bincode::deserialize_from(stream.try_clone().unwrap()) {
+                    Ok(qp_info) => qp_info,
+                    Err(err) => {
+                        warn!("failed to deserialize client qp info, {err}");
+                        warn!("closing session {session_id}");
+                        return;
+                    }
+                };
             info!("client qp info: {client_qp_info}");
 
             // create transport and self qp_info
@@ -216,14 +208,10 @@ where
         })?;
 
         // receive session info
-        let mut buf = [0; 1024];
-        let size = stream.read(&mut buf).map_err(|err| {
-            ClientError::Connect(format!("failed to recv session info from server, {err}"))
-        })?;
         let SessionInfo {
             qp_info,
             session_id,
-        } = bincode::deserialize(&buf[0..size]).map_err(|err| {
+        } = bincode::deserialize_from(stream).map_err(|err| {
             ClientError::Connect(format!("failed to deserialize session info, {err}"))
         })?; // TODO: handle error
         info!("client recv server qp info: {qp_info}, session id: {session_id}");
