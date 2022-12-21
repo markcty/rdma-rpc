@@ -37,6 +37,9 @@ impl Session {
     pub fn id(&self) -> u64 {
         self.id
     }
+    // fn send_num(&mut self,total_num:u32){
+
+    // }
     pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
         let data = bincode::serialize(&data)?;
 

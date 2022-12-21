@@ -222,7 +222,6 @@ impl Transport {
 
         Ok(packets)
     }
-
     pub(crate) fn send_all(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
         let len = packets.len();
         let mut left_to_be_sent: usize = len;
@@ -242,11 +241,6 @@ impl Transport {
             .qp
             .poll_recv_cq(&mut wcs)
             .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
-        if !res.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // info!("transport recv packet");
 
         let mut packets = Vec::new();
         for wc in res {
