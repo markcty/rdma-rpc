@@ -10,7 +10,6 @@ pub(crate) struct Packet {
     ack_num: u64,
     seq_num: u64,
     total_num: u64,
-    fin: bool,
     session_id: u64,
     data: Vec<u8>, // typically: this should be Vec<u8>
 }
@@ -21,17 +20,6 @@ impl Packet {
             ack_num: ack,
             seq_num: syn,
             total_num: 0,
-            fin: false,
-            session_id,
-            data: Vec::new(),
-        }
-    }
-    pub(crate) fn new_fin(ack: u64, syn: u64, session_id: u64) -> Packet {
-        Packet {
-            ack_num: ack,
-            seq_num: syn,
-            total_num: 0,
-            fin: true,
             session_id,
             data: Vec::new(),
         }
@@ -48,7 +36,6 @@ impl Packet {
             ack_num: ack,
             seq_num: syn,
             total_num,
-            fin: false,
             session_id,
             data,
         }
@@ -68,9 +55,7 @@ impl Packet {
     pub(crate) fn total_num(&self) -> u64 {
         self.total_num
     }
-    pub(crate) fn fin(&self) -> bool {
-        self.fin
-    }
+
     pub(crate) fn data(&self) -> &[u8] {
         self.data.as_slice()
     }

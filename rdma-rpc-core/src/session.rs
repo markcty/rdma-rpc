@@ -20,7 +20,6 @@ pub struct Session {
     transport: Transport,
     id: u64,
     syn: u64,
-    ack: u64,
 }
 
 #[derive(Debug)]
@@ -210,7 +209,6 @@ impl Session {
         Self {
             transport,
             id,
-            ack: 0,
             syn: 0,
         }
     }
