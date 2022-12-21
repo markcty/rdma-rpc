@@ -42,7 +42,29 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(init_num: usize, packet_num: u64) -> Self {
+    pub fn new_recv_window(init_num: usize) -> Self {
+        Self {
+            total_packet_num: 0,
+            seq_num_upper_bound: 0,
+            window_base: init_num,
+            window_upper: init_num,
+            waiting_range: [true; WINDOW_SIZE],
+            cur_waiting_num: 0,
+        }
+    }
+    fn set_packet_num(&mut self, packet_num: u64) {
+        let upper = if WINDOW_SIZE > packet_num as usize {
+            packet_num as usize
+        } else {
+            WINDOW_SIZE
+        };
+        self.total_packet_num = packet_num;
+        self.seq_num_upper_bound = self.window_base as u64 + packet_num;
+        self.window_upper = self.window_base + upper;
+        self.cur_waiting_num = upper;
+    }
+
+    pub fn new_sender_window(init_num: usize, packet_num: u64) -> Self {
         let upper = if WINDOW_SIZE > packet_num as usize {
             packet_num as usize
         } else {
@@ -121,6 +143,55 @@ impl Window {
         }
         Ok(WindowStatus::Continue)
     }
+    pub fn receiver_recv(
+        &mut self,
+        transport: &mut Transport,
+        session_id: u64,
+        buffer: &mut Vec<u8>,
+    ) -> Result<WindowStatus, Error> {
+        // TODO: assemble the packets to R
+        let packets = transport.recv()?;
+        for packet in packets {
+            assert_eq!(packet.session_id(), session_id);
+            if self.total_packet_num == 0 {
+                self.set_packet_num(packet.total_num());
+                warn!("setup recv window {:?}", self);
+            }
+            let seq_num = packet.seq();
+            // reply with ack = seq
+            let resp = Packet::new_empty(seq_num, 0, session_id);
+            info!("reply with {:?}", resp);
+            let resps = vec![resp];
+            transport.send_all(resps)?;
+
+            if self.window_base as u64 <= seq_num
+                && seq_num < self.window_upper as u64
+                && self.waiting_range[(seq_num - self.window_base as u64) as usize]
+            {
+                info!("get packet {:?}", &packet);
+                // this packet is acceptable
+                self.cur_waiting_num -= 1;
+                self.waiting_range[(seq_num - self.window_base as u64) as usize] = false;
+                insert_buffer(
+                    buffer,
+                    packet.data(),
+                    (seq_num) as usize * MESSAGE_CONTENT_SIZE,
+                );
+                if self.cur_waiting_num == 0 {
+                    if self.window_upper == self.seq_num_upper_bound as usize {
+                        warn!("receiver recv ended");
+                        return Ok(WindowStatus::RecvFinished);
+                    } else {
+                        self.reset_next_window();
+                        buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
+                        return Ok(WindowStatus::CurrentWindowDone);
+                    }
+                }
+            }
+        }
+        Ok(WindowStatus::Continue)
+    }
+
     fn reset_next_window(&mut self) {
         self.window_base = self.window_upper;
         self.window_upper = if self.window_base + WINDOW_SIZE < self.seq_num_upper_bound as usize {
@@ -152,7 +223,7 @@ impl Session {
         let mut round_cnt;
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
-        let mut send_window = Window::new(self.syn as usize, packet_total_num);
+        let mut send_window = Window::new_sender_window(self.syn as usize, packet_total_num);
         info!("get the window {:?}", send_window);
         // wait until the packet is received by the remote
         info!("starg sending, [packet num = {:?}]", packet_total_num);
@@ -186,55 +257,14 @@ impl Session {
     pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
         info!("start recv waiting");
         let mut buffer = Vec::new();
-        let mut window_base: usize = 0;
-        let mut window_upper: usize = window_base + WINDOW_SIZE;
-        let mut accept_range: [bool; WINDOW_SIZE] = [true; WINDOW_SIZE];
-        let mut accept_left = WINDOW_SIZE;
-        let mut total_packet_num: u64 = 0;
-        let mut recevied_packet_num: u64 = 0;
+        let mut recv_window: Window = Window::new_recv_window(self.syn as usize);
         buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
-        'listen: loop {
+        loop {
             // TODO: assemble the packets to R
-            let packets = self.transport.recv()?;
-            for packet in packets {
-                assert_eq!(packet.session_id(), self.id);
-                if total_packet_num == 0 {
-                    total_packet_num = packet.total_num();
-                }
-                info!("get packet {:?}", &packet);
-                let syn_num = packet.seq();
-                if window_base as u64 <= syn_num
-                    && syn_num < window_upper as u64
-                    && accept_range[(syn_num - window_base as u64) as usize]
-                {
-                    recevied_packet_num += 1;
-                    accept_left -= 1;
-                    accept_range[(syn_num - window_base as u64) as usize] = false;
-                    insert_buffer(
-                        &mut buffer,
-                        packet.data(),
-                        (syn_num) as usize * MESSAGE_CONTENT_SIZE,
-                    );
-                    if recevied_packet_num == total_packet_num {
-                        let resp = Packet::new_empty(syn_num, 0, self.id);
-                        info!("reply with {:?}", resp);
-                        let resps = vec![resp];
-                        self.transport.send_all(resps)?;
-                        break 'listen;
-                    }
-                    if accept_left == 0 {
-                        window_base += WINDOW_SIZE;
-                        window_upper = window_base + WINDOW_SIZE;
-                        accept_range = [true; WINDOW_SIZE];
-                        accept_left = WINDOW_SIZE;
-                        buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
-                    }
-                }
-                let resp = Packet::new_empty(syn_num, 0, self.id);
-                info!("reply with {:?}", resp);
-                let resps = vec![resp];
-                self.transport.send_all(resps)?;
-            }
+            match recv_window.receiver_recv(&mut self.transport, self.id, &mut buffer) {
+                Ok(WindowStatus::RecvFinished) => break,
+                _ => {}
+            };
         }
         Ok(bincode::deserialize(&buffer)?)
     }
