@@ -13,6 +13,7 @@ const ROUND_MAX: u32 = 500;
 const INTERVAL_PER_ROUND: u32 = 10;
 const INTERVAL_ONE_WINDOW: u32 = 2;
 const WINDOW_SIZE: usize = 2;
+const MAX_OVER_TIME_COUNT: u32 = 10;
 /// Session provides send/receive between server/client
 /// Session should act like a stream. Users will read/write from this object.
 /// Should handle reorder and package loss.
@@ -34,6 +35,7 @@ pub enum WindowStatus {
 pub struct Window {
     total_packet_num: u64,
     seq_num_upper_bound: u64,
+    init_seq_num: u64,
     window_base: usize,
     window_upper: usize,
     waiting_range: [bool; WINDOW_SIZE],
@@ -41,29 +43,19 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new_recv_window(init_num: usize) -> Self {
+    pub fn new_recv_window(init_num: u64) -> Self {
         Self {
             total_packet_num: 0,
             seq_num_upper_bound: 0,
-            window_base: init_num,
-            window_upper: init_num,
+            init_seq_num: init_num,
+            window_base: init_num as usize,
+            window_upper: init_num as usize,
             waiting_range: [true; WINDOW_SIZE],
             cur_waiting_num: 0,
         }
     }
-    fn set_packet_num(&mut self, packet_num: u64) {
-        let upper = if WINDOW_SIZE > packet_num as usize {
-            packet_num as usize
-        } else {
-            WINDOW_SIZE
-        };
-        self.total_packet_num = packet_num;
-        self.seq_num_upper_bound = self.window_base as u64 + packet_num;
-        self.window_upper = self.window_base + upper;
-        self.cur_waiting_num = upper;
-    }
 
-    pub fn new_sender_window(init_num: usize, packet_num: u64) -> Self {
+    pub fn new_sender_window(init_num: u64, packet_num: u64) -> Self {
         let upper = if WINDOW_SIZE > packet_num as usize {
             packet_num as usize
         } else {
@@ -72,11 +64,15 @@ impl Window {
         Self {
             total_packet_num: packet_num,
             seq_num_upper_bound: init_num as u64 + packet_num,
-            window_base: init_num,
-            window_upper: init_num + upper,
+            init_seq_num: init_num,
+            window_base: init_num as usize,
+            window_upper: init_num as usize + upper,
             waiting_range: [true; WINDOW_SIZE],
             cur_waiting_num: upper,
         }
+    }
+    pub fn total_packet_num(&self) -> u64 {
+        self.total_packet_num
     }
     pub fn send_packets(
         &self,
@@ -89,8 +85,8 @@ impl Window {
             // only re-send those still waiting
             if self.waiting_range[seq_num - self.window_base] {
                 sleep_millis(INTERVAL_ONE_WINDOW);
-                let down_bound = seq_num as usize * MESSAGE_CONTENT_SIZE;
-                let up_bound = down_bound as usize + MESSAGE_CONTENT_SIZE;
+                let down_bound = (seq_num - self.init_seq_num as usize) * MESSAGE_CONTENT_SIZE;
+                let up_bound = down_bound + MESSAGE_CONTENT_SIZE;
                 let cur_packet = Packet::new(
                     0,
                     seq_num as u64,
@@ -174,7 +170,7 @@ impl Window {
                 insert_buffer(
                     buffer,
                     packet.data(),
-                    (seq_num) as usize * MESSAGE_CONTENT_SIZE,
+                    (seq_num - self.init_seq_num) as usize * MESSAGE_CONTENT_SIZE,
                 );
                 if self.cur_waiting_num == 0 {
                     if self.window_upper == self.seq_num_upper_bound as usize {
@@ -189,6 +185,18 @@ impl Window {
             }
         }
         Ok(WindowStatus::Continue)
+    }
+
+    fn set_packet_num(&mut self, packet_num: u64) {
+        let upper = if WINDOW_SIZE > packet_num as usize {
+            packet_num as usize
+        } else {
+            WINDOW_SIZE
+        };
+        self.total_packet_num = packet_num;
+        self.seq_num_upper_bound = self.window_base as u64 + packet_num;
+        self.window_upper = self.window_base + upper;
+        self.cur_waiting_num = upper;
     }
 
     fn reset_next_window(&mut self) {
@@ -221,8 +229,9 @@ impl Session {
         let mut round_cnt;
         let packet_total_num =
             ((data.len() + MESSAGE_CONTENT_SIZE - 1) / MESSAGE_CONTENT_SIZE) as u64;
-        let mut send_window = Window::new_sender_window(self.syn as usize, packet_total_num);
+        let mut send_window = Window::new_sender_window(self.syn, packet_total_num);
         info!("get the window {:?}", send_window);
+        let mut over_time_count: u32 = 0;
         // wait until the packet is received by the remote
         info!("starg sending, [packet num = {:?}]", packet_total_num);
         'send: loop {
@@ -234,6 +243,11 @@ impl Session {
                 // listen loop
                 if round_cnt >= ROUND_MAX {
                     // listening over time
+                    over_time_count += 1;
+                    if over_time_count >= MAX_OVER_TIME_COUNT {
+                        // overtime too much, maybe the receiver is not listening anymore
+                        break 'send;
+                    }
                     break;
                 }
                 sleep_millis(INTERVAL_PER_ROUND);
@@ -248,6 +262,7 @@ impl Session {
                 round_cnt += 1;
             }
         }
+        self.syn += packet_total_num;
         Ok(())
     }
 
@@ -255,7 +270,7 @@ impl Session {
     pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
         info!("start recv waiting");
         let mut buffer = Vec::new();
-        let mut recv_window: Window = Window::new_recv_window(self.syn as usize);
+        let mut recv_window: Window = Window::new_recv_window(self.syn);
         buffer.resize(buffer.len() + WINDOW_SIZE * MESSAGE_CONTENT_SIZE, 0u8);
         loop {
             // TODO: assemble the packets to R
@@ -264,6 +279,7 @@ impl Session {
                 _ => {}
             };
         }
+        self.syn += recv_window.total_packet_num();
         Ok(bincode::deserialize(&buffer)?)
     }
 }
