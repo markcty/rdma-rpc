@@ -84,16 +84,21 @@ impl Session {
             // receive acks
             for _ in 0..MAX_POLL_CQ_RETRY {
                 sleep_millis(POLL_INTERVAL);
-                let packets = self.transport.try_recv()?;
-                for packet in packets {
-                    if !packet.is_ack() || packet.ack() > last_seq {
-                        return Ok(()); // the remote end has got all packets and entered send state
-                    }
-                    if first_seq <= packet.ack() && packet.ack() <= last_seq {
-                        waiting[(packet.ack() - first_seq) as usize] = false;
-                    }
+                let packet = if let Some(packet) = self.transport.try_recv()? {
+                    packet
+                } else {
+                    continue;
+                };
+
+                if !packet.is_ack() || packet.ack() > last_seq {
+                    return Ok(()); // the remote end has got all packets and entered send state
                 }
-                if !waiting.iter().any(|waiting| *waiting) {
+
+                if first_seq <= packet.ack() && packet.ack() <= last_seq {
+                    waiting[(packet.ack() - first_seq) as usize] = false;
+                }
+
+                if waiting.iter().all(|waiting| !(*waiting)) {
                     return Ok(());
                 }
             }

@@ -234,33 +234,36 @@ impl Transport {
         }
     }
 
-    pub(crate) fn try_recv(&self) -> Result<Vec<Packet>, Error> {
+    pub(crate) fn try_recv(&self) -> Result<Option<Packet>, Error> {
         // poll recv cq
-        let mut wcs = [Default::default(); POOL_SIZE as usize];
+        let mut wcs = [Default::default()];
         let res = self
             .qp
             .poll_recv_cq(&mut wcs)
             .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
 
-        let mut packets = Vec::new();
-        for wc in res {
-            // deserialize arg
-            let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
-            let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
-            let msg: Packet = bincode::deserialize(unsafe {
-                alloc::slice::from_raw_parts(
-                    (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
-                    msg_sz,
-                )
-            })?;
-            packets.push(msg);
-
-            // post recv
-            self.qp
-                .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
-                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        if res.is_empty() {
+            return Ok(None);
         }
-        Ok(packets)
+
+        let wc = wcs[0];
+
+        // deserialize arg
+        let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
+        let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
+        let packet: Packet = bincode::deserialize(unsafe {
+            alloc::slice::from_raw_parts(
+                (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
+                msg_sz,
+            )
+        })?;
+
+        // post recv again
+        self.qp
+            .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
+            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+
+        Ok(Some(packet))
     }
 
     pub fn qp_info(&self) -> QPInfo {
