@@ -18,8 +18,8 @@ pub struct ServerStub<T, R> {
 
 impl<T, R> ServerStub<T, R>
 where
-    T: DeserializeOwned,
-    R: Serialize,
+    T: DeserializeOwned + Clone,
+    R: Serialize + Clone,
 {
     /// Session is maintained by the outside because in no_std, we cannot spawn another thread to handle incomming connection
     pub fn new(session: Session, handler: Arc<dyn RpcHandler<Args = T, Resp = R>>) -> Self {

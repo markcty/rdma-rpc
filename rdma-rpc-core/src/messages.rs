@@ -1,27 +1,83 @@
-use core::fmt::Display;
+use core::{cmp::Ordering, fmt::Display};
 
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use KRdmaKit::services_user::ibv_gid_wrapper;
 
 /// Packet is the base element transmitted on the rdma network
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Packet<T> {
-    // TODO: add header like ack, syn
+#[derive(Serialize, Deserialize, Debug, Clone, Eq)]
+pub(crate) struct Packet {
+    is_ack: bool,
+    ack_num: u64,
+    seq_num: u64,
+    total_num: u64,
     session_id: u64,
-    data: T, // typically: this should be Vec<u8>
+    data: Vec<u8>,
 }
 
-impl<T> Packet<T> {
-    pub(crate) fn new(session_id: u64, data: T) -> Packet<T> {
-        Self { session_id, data }
+impl Packet {
+    pub(crate) fn new_ack(ack_num: u64, session_id: u64) -> Packet {
+        Packet {
+            is_ack: true,
+            ack_num,
+            seq_num: 0,
+            total_num: 0,
+            session_id,
+            data: Vec::new(),
+        }
     }
 
-    pub(crate) fn into_inner(self) -> T {
-        self.data
+    pub(crate) fn new(seq_num: u64, session_id: u64, data: Vec<u8>, total_num: u64) -> Packet {
+        Self {
+            is_ack: false,
+            ack_num: 0,
+            seq_num,
+            total_num,
+            session_id,
+            data,
+        }
     }
 
     pub(crate) fn session_id(&self) -> u64 {
         self.session_id
+    }
+
+    pub(crate) fn ack(&self) -> u64 {
+        self.ack_num
+    }
+
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq_num
+    }
+
+    pub(crate) fn total_num(&self) -> u64 {
+        self.total_num
+    }
+
+    pub(crate) fn data(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+
+    pub(crate) fn is_ack(&self) -> bool {
+        self.is_ack
+    }
+}
+
+impl Ord for Packet {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.seq_num.cmp(&other.seq_num)
+    }
+}
+
+impl PartialOrd for Packet {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Packet {
+    fn eq(&self, other: &Self) -> bool {
+        self.seq_num == other.seq_num
     }
 }
 

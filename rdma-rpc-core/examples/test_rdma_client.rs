@@ -1,7 +1,6 @@
 use std::env;
 
 use clap::Parser;
-use log::info;
 use KRdmaKit::*;
 
 #[derive(Parser, Debug)]

@@ -47,7 +47,7 @@ pub enum ServerError {
 
 impl<T, R> Server<T, R>
 where
-    T: DeserializeOwned + 'static,
+    T: DeserializeOwned + 'static + Clone,
     R: Serialize + 'static + Clone,
 {
     pub fn new(
@@ -176,8 +176,8 @@ pub enum ClientError {
 
 impl<T, R> Client<T, R>
 where
-    T: Serialize + 'static,
-    R: DeserializeOwned + 'static,
+    T: Serialize + 'static + Clone,
+    R: DeserializeOwned + 'static + Clone,
 {
     pub fn new(dev: &str, addr: SocketAddrV4, ib_port: u8) -> Result<Client<T, R>, ClientError> {
         // create context

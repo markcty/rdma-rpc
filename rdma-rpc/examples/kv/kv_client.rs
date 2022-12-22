@@ -3,10 +3,11 @@ use rdma_rpc::Client;
 mod protocol;
 use protocol::{Args, Resp};
 use tracing::{info, Level};
+use tracing_subscriber::EnvFilter;
 
 fn main() {
     tracing_subscriber::fmt::fmt()
-        .without_time()
+        .with_env_filter(EnvFilter::from_default_env())
         .with_max_level(Level::DEBUG)
         .init();
     let mut client: Client<Args, Resp> =
