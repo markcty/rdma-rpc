@@ -275,3 +275,57 @@ impl Transport {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use crate::{
+        messages::Packet,
+        utils::{
+            sleep_millis,
+            tests::{new_random_data, new_two_transport},
+        },
+    };
+
+    #[test]
+    fn it_works() {
+        let (mut tp1, tp2) = new_two_transport();
+
+        let packet = Packet::new(0, 0, new_random_data(80), 1);
+        tp1.send_burst(vec![packet.clone()]).unwrap();
+
+        let received_packet = tp2.recv().unwrap();
+
+        assert_eq!(packet.data(), received_packet[0].data());
+    }
+
+    #[test]
+    fn try_recv() {
+        let (mut tp1, tp2) = new_two_transport();
+
+        let packet = Packet::new(0, 0, new_random_data(80), 1);
+        tp1.send_burst(vec![packet.clone()]).unwrap();
+        sleep_millis(100);
+
+        let received_packet = tp2.try_recv_one().unwrap();
+
+        assert_eq!(packet.data(), received_packet.unwrap().data());
+    }
+
+    #[test]
+    fn try_recv_not_block() {
+        let (mut tp1, tp2) = new_two_transport();
+
+        let packet = Packet::new(0, 0, new_random_data(80), 1);
+
+        assert!(tp2.try_recv_one().unwrap().is_none());
+
+        tp1.send_burst(vec![packet.clone()]).unwrap();
+        sleep_millis(100);
+
+        let received_packet = tp2.try_recv_one().unwrap();
+
+        assert_eq!(packet.data(), received_packet.unwrap().data());
+    }
+}
