@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use alloc::{slice, string::String};
+
 use thiserror_no_std::Error;
 
 /// A simple static bytes abstraction inspired by https://github.com/tokio-rs/bytes/

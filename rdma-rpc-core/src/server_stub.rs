@@ -1,9 +1,11 @@
 extern crate alloc;
 
-use crate::session::Session;
 use alloc::sync::Arc;
+
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::{info, warn};
+
+use crate::session::Session;
 
 pub trait RpcHandler: Send + Sync {
     type Args;
@@ -21,7 +23,6 @@ where
     T: DeserializeOwned + Clone,
     R: Serialize + Clone,
 {
-    /// Session is maintained by the outside because in no_std, we cannot spawn another thread to handle incomming connection
     pub fn new(session: Session, handler: Arc<dyn RpcHandler<Args = T, Resp = R>>) -> Self {
         Self { session, handler }
     }

@@ -1,5 +1,6 @@
 extern crate alloc;
 
+use alloc::sync::Arc;
 use std::{
     io::{Read, Write},
     marker::PhantomData,
@@ -7,7 +8,6 @@ use std::{
     thread,
 };
 
-use alloc::sync::Arc;
 use rdma_rpc_core::{
     client_stub::ClientStub,
     messages::QPInfo,

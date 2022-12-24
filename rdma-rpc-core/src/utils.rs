@@ -7,9 +7,9 @@ pub(crate) fn sleep_millis(duration: u32) {
 /// Utils for tests
 #[cfg(test)]
 pub(crate) mod tests {
+    use alloc::{sync::Arc, vec::Vec};
     use core::iter;
 
-    use alloc::{sync::Arc, vec::Vec};
     use libc::time_t;
     use KRdmaKit::{context::Context, random, services_user, QueuePair, QueuePairBuilder, UDriver};
 

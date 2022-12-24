@@ -1,28 +1,39 @@
-use alloc::borrow::ToOwned;
-use alloc::vec::Vec;
-use alloc::{collections::BTreeSet, vec};
+use alloc::{
+    borrow::ToOwned,
+    collections::{BTreeMap, BTreeSet},
+    vec,
+    vec::Vec,
+};
 
-use crate::utils::sleep_millis;
+use serde::{de::DeserializeOwned, Serialize};
+use tracing::debug;
+
 use crate::{
     error::Error,
     messages::Packet,
     transport::{Transport, MAX_PACKET_BYTES},
+    utils::sleep_millis,
+    SlidingWindow,
 };
-use serde::{de::DeserializeOwned, Serialize};
-use tracing::debug;
 
 const MAX_POLL_CQ_RETRY: u32 = 500;
 const POLL_INTERVAL: u32 = 1;
 const WINDOW_SIZE: usize = 2;
-const MAX_RETRY: u32 = 10;
 
 /// Session provides send/receive between server/client
-/// Session should act like a stream. Users will read/write from this object.
-/// Should handle reorder and package loss.
+/// Session should act like a stream. Users will read/write from this object by using `send_bytes` and `recv_bytes`.
+/// User can also pass in a serializable structure to send, or deserializable structure to recv.
+/// Session will handle reorder and package loss.
 pub struct Session {
     transport: Transport,
+    /// Session ID
     id: u64,
+    /// the largest seq of all packets sent
     seq: u64,
+    /// the largest ack of all packets received and acknowledged
+    ack: u64,
+    /// seq to packet
+    recv_buffer: BTreeMap<u64, Packet>,
 }
 
 impl Session {
@@ -32,6 +43,8 @@ impl Session {
             transport,
             id,
             seq: 0,
+            ack: 0,
+            recv_buffer: BTreeMap::new(),
         }
     }
 
@@ -39,104 +52,151 @@ impl Session {
         self.id
     }
 
-    pub(crate) fn send<T: Serialize + Clone>(&mut self, data: T) -> Result<(), Error> {
+    // will ensure all bytes are sent and acknowledged by the remote end
+    pub fn send_bytes(&mut self, bytes: Vec<u8>) -> Result<(), Error> {
+        debug!("sending {} bytes", bytes.len());
+
+        let packets = self.make_packets(bytes); // all packets to be sent
+        let mut waiting: BTreeSet<u64> = packets.iter().map(|packet| packet.seq()).collect(); // packets that are waiting to be acknowledged by the remote end
+        let mut window = SlidingWindow::new(packets.as_slice(), WINDOW_SIZE); // current window
+
+        loop {
+            let packets: Vec<_> = window
+                .get()
+                .iter()
+                .filter_map(|packet| waiting.contains(&packet.seq()).then(|| packet.to_owned()))
+                .collect();
+            assert!(!packets.is_empty());
+
+            self.transport.send_burst(packets)?;
+
+            let mut round = 0;
+            while round < MAX_POLL_CQ_RETRY {
+                sleep_millis(POLL_INTERVAL);
+
+                // recv acks, if reieved packets are not ack, insert them to recv_buffer and send back acks
+                let packets = self.transport.try_recv()?;
+                let mut acks = vec![];
+                for packet in packets {
+                    if !packet.is_ack() {
+                        acks.push(Packet::new_ack(packet.seq(), self.id));
+                        self.insert_recv_buffer(packet);
+                    } else {
+                        waiting.remove(&packet.ack());
+                    }
+                }
+                self.transport.send_burst(acks)?;
+
+                // try to move the window
+                let last_sent_seq = window.last().seq();
+                while !waiting.contains(&window.first().seq()) {
+                    window.slide();
+                    if window.is_closed() {
+                        return Ok(());
+                    }
+                }
+
+                // if window has moved, send new packets to the remote end and reset waiting round
+                if window.last().seq() > last_sent_seq {
+                    round = 0; // reset round
+
+                    let new_packets = window
+                        .get()
+                        .iter()
+                        .filter_map(|packet| {
+                            (packet.seq() > last_sent_seq).then(|| packet.to_owned())
+                        })
+                        .collect();
+                    self.transport.send_burst(new_packets)?;
+                } else {
+                    round += 1;
+                }
+            }
+        }
+    }
+
+    // will return as soon as some bytes are received(order is guaranteed)
+    pub fn recv_bytes(&mut self) -> Result<Vec<u8>, Error> {
+        loop {
+            // check if there are bytes ready to be returned to users
+            let mut ready_bytes = vec![];
+            while let Some(packet) = self.recv_buffer.remove(&self.ack) {
+                self.ack += 1;
+                let mut data = packet.into_data();
+                ready_bytes.append(&mut data);
+            }
+            if !ready_bytes.is_empty() {
+                debug!("received {} bytes", ready_bytes.len());
+                return Ok(ready_bytes);
+            }
+
+            let packets = self.transport.recv()?;
+
+            // send back acks
+            let mut acks = vec![];
+            for packet in packets {
+                assert_eq!(self.id(), packet.session_id());
+                if packet.is_ack() {
+                    continue;
+                }
+
+                // insert the packet to buffer and reply with ack
+                let ack_num = packet.seq();
+                acks.push(Packet::new_ack(packet.seq(), self.id));
+                debug!("send ack {ack_num}");
+
+                self.insert_recv_buffer(packet);
+            }
+            self.transport.send_burst(acks)?;
+        }
+    }
+
+    pub fn send<T: Serialize + Clone>(&mut self, value: T) -> Result<(), Error> {
         debug!("start sending");
 
-        let data = bincode::serialize(&data)?;
-        let packets = self.make_packets(data);
+        // prepare data
+        let size = bincode::serialized_size(&value)? as usize;
+        let mut data = vec![0; (8 + size) as usize];
+        data[0..8].copy_from_slice(&size.to_be_bytes());
+        bincode::serialize_into(&mut data[8..], &value)?;
 
-        // sliding window: selective repeat
-        for window in packets.chunks(WINDOW_SIZE) {
-            self.send_window_checked(window)?;
-        }
+        self.send_bytes(data)?;
 
         debug!("send succeeded");
         Ok(())
     }
 
-    fn make_packets(&mut self, data: Vec<u8>) -> Vec<Packet> {
-        let chunks = data.chunks(MAX_PACKET_BYTES);
-        let total_num = chunks.len();
-        chunks
+    pub fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
+        debug!("start receiving");
+
+        let mut bytes = self.recv_bytes()?;
+        let size = usize::from_be_bytes(bytes[0..8].try_into().unwrap());
+        bytes.reserve(size);
+
+        while bytes.len() < size + 8 {
+            let mut new_bytes = self.recv_bytes()?;
+            bytes.append(&mut new_bytes);
+        }
+
+        debug!("receive suceeded");
+        Ok(bincode::deserialize(&bytes[8..(8 + size)])?)
+    }
+
+    fn make_packets(&mut self, bytes: Vec<u8>) -> Vec<Packet> {
+        bytes
+            .chunks(MAX_PACKET_BYTES)
             .map(|chunk| {
-                let packet = Packet::new(self.seq, self.id, chunk.to_vec(), total_num as u64);
+                let packet = Packet::new(self.seq, self.id, chunk.to_vec());
                 self.seq += 1;
                 packet
             })
             .collect()
     }
 
-    // will send current window until succeeded
-    fn send_window_checked(&mut self, window: &[Packet]) -> Result<(), Error> {
-        let mut waiting = vec![true; window.len()]; // whether a packet has been sent and acknowledged by the remote end
-        let first_seq = window[0].seq();
-        let last_seq = window.last().unwrap().seq();
-        for _ in 0..MAX_RETRY {
-            // only re-send those still waiting
-            let packets: Vec<Packet> = waiting
-                .iter()
-                .enumerate()
-                .filter_map(|(i, waiting)| waiting.then(|| window[i].to_owned()))
-                .collect();
-
-            self.transport.send_burst(packets)?;
-
-            // receive acks
-            for _ in 0..MAX_POLL_CQ_RETRY {
-                sleep_millis(POLL_INTERVAL);
-                let packet = if let Some(packet) = self.transport.try_recv()? {
-                    packet
-                } else {
-                    continue;
-                };
-
-                if !packet.is_ack() || packet.ack() > last_seq {
-                    return Ok(()); // the remote end has got all packets and entered send state
-                }
-
-                if first_seq <= packet.ack() && packet.ack() <= last_seq {
-                    waiting[(packet.ack() - first_seq) as usize] = false;
-                }
-
-                if waiting.iter().all(|waiting| !(*waiting)) {
-                    return Ok(());
-                }
-            }
-            debug!("send window again");
-        }
-
-        Err(Error::Timeout)
-    }
-
-    pub(crate) fn recv<R: DeserializeOwned>(&mut self) -> Result<R, Error> {
-        debug!("start receiving");
-        let mut buffer = BTreeSet::new();
-        loop {
-            let packets = self.transport.recv()?;
-            let mut total_packet_num = 0;
-            for packet in packets {
-                assert_eq!(self.id(), packet.session_id());
-                if total_packet_num == 0 {
-                    total_packet_num = packet.total_num();
-                    debug!("sender has {total_packet_num} packets to send");
-                }
-
-                // insert the packet to buffer and reply with ack
-                let ack_num = packet.seq();
-                buffer.insert(packet);
-                let ack = Packet::new_ack(ack_num, self.id);
-                self.transport.send_burst(vec![ack])?;
-                debug!("send ack {ack_num}");
-
-                if buffer.len() == total_packet_num as usize {
-                    let bytes: Vec<u8> = buffer
-                        .into_iter()
-                        .flat_map(|packet| packet.data().to_vec())
-                        .collect();
-                    debug!("receive suceeded");
-                    return Ok(bincode::deserialize(bytes.as_slice())?);
-                }
-            }
+    fn insert_recv_buffer(&mut self, packet: Packet) {
+        assert!(!packet.is_ack());
+        if packet.seq() >= self.ack {
+            self.recv_buffer.insert(packet.seq(), packet);
         }
     }
 }

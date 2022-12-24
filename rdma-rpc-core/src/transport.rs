@@ -1,4 +1,5 @@
 use alloc::{collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec};
+
 use tracing::{debug, error, info};
 use KRdmaKit::{
     context::Context,
@@ -222,6 +223,40 @@ impl Transport {
         Ok(packets)
     }
 
+    pub(crate) fn try_recv(&self) -> Result<Vec<Packet>, Error> {
+        // poll recv cq
+        let mut wcs = [Default::default(); POOL_SIZE as usize];
+        let res = self
+            .qp
+            .poll_recv_cq(&mut wcs)
+            .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
+
+        let mut packets = Vec::new();
+        for wc in res {
+            // deserialize arg
+            let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
+            let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
+            let msg: Packet = bincode::deserialize(unsafe {
+                alloc::slice::from_raw_parts(
+                    (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
+                    msg_sz,
+                )
+            })?; // TODO: post recv when handle error
+            packets.push(msg);
+
+            // post recv
+            self.qp
+                .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
+                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        }
+
+        if !packets.is_empty() {
+            debug!("recv {} packets", packets.len());
+        }
+
+        Ok(packets)
+    }
+
     pub(crate) fn send_burst(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
         let len = packets.len();
         let mut left_to_be_sent: usize = len;
@@ -232,38 +267,6 @@ impl Transport {
                 break Ok(());
             }
         }
-    }
-
-    pub(crate) fn try_recv(&self) -> Result<Option<Packet>, Error> {
-        // poll recv cq
-        let mut wcs = [Default::default()];
-        let res = self
-            .qp
-            .poll_recv_cq(&mut wcs)
-            .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
-
-        if res.is_empty() {
-            return Ok(None);
-        }
-
-        let wc = wcs[0];
-
-        // deserialize arg
-        let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
-        let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
-        let packet: Packet = bincode::deserialize(unsafe {
-            alloc::slice::from_raw_parts(
-                (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
-                msg_sz,
-            )
-        })?;
-
-        // post recv again
-        self.qp
-            .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
-
-        Ok(Some(packet))
     }
 
     pub fn qp_info(&self) -> QPInfo {
@@ -292,40 +295,40 @@ mod tests {
     fn it_works() {
         let (mut tp1, tp2) = new_two_transport();
 
-        let packet = Packet::new(0, 0, new_random_data(80), 1);
+        let packet = Packet::new(0, 0, new_random_data(80));
         tp1.send_burst(vec![packet.clone()]).unwrap();
 
-        let received_packet = tp2.recv().unwrap();
+        let mut received_packet = tp2.recv().unwrap();
 
-        assert_eq!(packet.data(), received_packet[0].data());
+        assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
     }
 
     #[test]
     fn try_recv() {
         let (mut tp1, tp2) = new_two_transport();
 
-        let packet = Packet::new(0, 0, new_random_data(80), 1);
+        let packet = Packet::new(0, 0, new_random_data(80));
         tp1.send_burst(vec![packet.clone()]).unwrap();
         sleep_millis(100);
 
-        let received_packet = tp2.try_recv_one().unwrap();
+        let mut received_packet = tp2.recv().unwrap();
 
-        assert_eq!(packet.data(), received_packet.unwrap().data());
+        assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
     }
 
     #[test]
     fn try_recv_not_block() {
         let (mut tp1, tp2) = new_two_transport();
 
-        let packet = Packet::new(0, 0, new_random_data(80), 1);
+        let packet = Packet::new(0, 0, new_random_data(80));
 
-        assert!(tp2.try_recv_one().unwrap().is_none());
+        assert!(tp2.try_recv().unwrap().is_empty());
 
         tp1.send_burst(vec![packet.clone()]).unwrap();
         sleep_millis(100);
 
-        let received_packet = tp2.try_recv_one().unwrap();
+        let mut received_packet = tp2.recv().unwrap();
 
-        assert_eq!(packet.data(), received_packet.unwrap().data());
+        assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
     }
 }

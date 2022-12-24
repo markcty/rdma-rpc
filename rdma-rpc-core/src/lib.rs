@@ -8,8 +8,11 @@ pub(crate) mod message_buffer;
 pub mod messages;
 pub mod server_stub;
 pub mod session;
+pub mod sliding_window;
 pub mod transport;
 pub(crate) mod utils;
+
+pub use sliding_window::SlidingWindow;
 
 #[cfg(test)]
 mod tests {
