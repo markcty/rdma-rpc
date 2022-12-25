@@ -297,10 +297,6 @@ mod tests {
 
     #[test]
     fn it_works() {
-        tracing_subscriber::fmt::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
         let (mut tp1, tp2) = new_two_transport();
 
         let data = new_random_data(MAX_DATA_BYTES);
@@ -320,7 +316,7 @@ mod tests {
         tp1.send_burst(vec![packet.clone()]).unwrap();
         sleep_millis(100);
 
-        let mut received_packet = tp2.recv().unwrap();
+        let mut received_packet = tp2.try_recv().unwrap();
 
         assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
     }

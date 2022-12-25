@@ -156,7 +156,7 @@ impl Session {
 
         // prepare data
         let size = bincode::serialized_size(&value)? as usize;
-        let mut data = vec![0; (8 + size) as usize];
+        let mut data = vec![0; 8 + size];
         data[0..8].copy_from_slice(&size.to_be_bytes());
         bincode::serialize_into(&mut data[8..], &value)?;
 
@@ -250,7 +250,6 @@ mod tests {
             let mut buffer = vec![];
             while buffer.len() != huge_bytes_c.len() {
                 let mut bytes = s2.recv_bytes().unwrap();
-                tracing::info!("recv");
                 buffer.append(&mut bytes);
             }
             assert_eq!(buffer, huge_bytes_c);

@@ -4,9 +4,9 @@ use core::cmp::min;
 /// # Examples
 ///
 /// ```
-/// # use rdma_rpc_core::sliding_window::Window;
+/// # use rdma_rpc_core::sliding_window::SlidingWindow;
 /// let data = [1, 2, 3];
-/// let mut window = Window::new(data.as_slice(), 2);
+/// let mut window = SlidingWindow::new(data.as_slice(), 2);
 /// assert_eq!(&[1, 2], window.get());
 /// window.slide();
 /// assert_eq!(&[2, 3], window.get());
