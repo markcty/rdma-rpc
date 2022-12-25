@@ -31,6 +31,7 @@ pub struct Server<T, R> {
     ib_port: u8,
     context: Arc<Context>,
     handler: Arc<dyn RpcHandler<Args = T, Resp = R>>,
+    session_id: u64,
 }
 
 #[derive(Error, Debug)]
@@ -73,10 +74,11 @@ where
             ib_port,
             context,
             handler,
+            session_id: 0,
         })
     }
 
-    pub fn serve(self) -> Result<(), ServerError> {
+    pub fn serve(mut self) -> Result<(), ServerError> {
         info!("server start listening on {}", self.addr);
         let listener =
             TcpListener::bind(self.addr).map_err(|e| ServerError::TcpBind(e.to_string()))?;
@@ -93,14 +95,14 @@ where
         Ok(())
     }
 
-    pub fn handle_client(&self, mut stream: TcpStream) {
+    pub fn handle_client(&mut self, mut stream: TcpStream) {
         let context = Arc::clone(&self.context);
         let ib_port = self.ib_port;
         let handler = Arc::clone(&self.handler);
+        // create a new session
+        let session_id = self.session_id;
+        self.session_id += 1;
         thread::spawn(move || {
-            // create a new session
-            let session_id = rand::random();
-
             // receive QPInfo from stream
             let mut buf = [0; 1024];
             let size = match stream.read(&mut buf) {
@@ -170,8 +172,6 @@ pub enum ClientError {
     Rdma(String),
     #[error("connect failed, {0}")]
     Connect(String),
-    #[error("internal error, {0}")]
-    Internal(String),
 }
 
 impl<T, R> Client<T, R>
@@ -248,6 +248,6 @@ where
 
 impl From<rdma_rpc_core::error::Error> for ClientError {
     fn from(err: rdma_rpc_core::error::Error) -> Self {
-        ClientError::Internal(err.to_string())
+        ClientError::Rdma(err.to_string())
     }
 }

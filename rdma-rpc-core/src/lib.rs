@@ -13,16 +13,3 @@ pub mod transport;
 pub(crate) mod utils;
 
 pub use sliding_window::SlidingWindow;
-
-#[cfg(test)]
-mod tests {
-    use KRdmaKit::UDriver;
-
-    #[test]
-    fn rdma_works() {
-        KRdmaKit::log::info!(
-            "Num RDMA devices found: {}",
-            UDriver::create().unwrap().devices().len()
-        );
-    }
-}

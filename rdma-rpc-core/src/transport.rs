@@ -11,10 +11,12 @@ use crate::{
     error::Error,
     messages::{Packet, QPInfo},
 };
-const BUF_SIZE: u64 = 4096; // 4KB
+pub const MTU: u64 = 1024;
+const BUF_SIZE: u64 = MTU; // 4KB
 const UD_DATA_OFFSET: usize = 40; // for a UD message, the first 40 bytes are reserved for GRH
-pub(crate) const MAX_PACKET_BYTES: usize = BUF_SIZE as usize - UD_DATA_OFFSET;
-const POOL_SIZE: u8 = 8; // how many mrs are in a mr pool
+const MAX_PACKET_BYTES: usize = BUF_SIZE as usize - UD_DATA_OFFSET;
+pub(crate) const MAX_DATA_BYTES: usize = MAX_PACKET_BYTES - 33; // reserve for packet meta
+const POOL_SIZE: u8 = 64; // how many mrs are there in a mr pool
 
 struct MemoryRegionWrapper {
     mr: Arc<MemoryRegion>,
@@ -168,11 +170,12 @@ impl Transport {
                 let buffer: &mut [u8] = unsafe {
                     alloc::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize)
                 };
-                bincode::serialize_into(buffer, packet)?;
                 let size = bincode::serialized_size(packet)?;
+                assert!((size as usize) <= MAX_PACKET_BYTES);
+                bincode::serialize_into(buffer, packet)?;
 
                 // post send
-                debug!("send 1 packet");
+                debug!("send 1 packet, size: {size}");
                 self.qp
                     .post_datagram(&self.endpoint, &mr, 0..size, id, true)
                     .map_err(|err| {
@@ -285,6 +288,7 @@ mod tests {
 
     use crate::{
         messages::Packet,
+        transport::MAX_DATA_BYTES,
         utils::{
             sleep_millis,
             tests::{new_random_data, new_two_transport},
@@ -293,21 +297,26 @@ mod tests {
 
     #[test]
     fn it_works() {
+        tracing_subscriber::fmt::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         let (mut tp1, tp2) = new_two_transport();
 
-        let packet = Packet::new(0, 0, new_random_data(80));
-        tp1.send_burst(vec![packet.clone()]).unwrap();
+        let data = new_random_data(MAX_DATA_BYTES);
+        let packet = Packet::new(0, 0, data.clone());
+        tp1.send_burst(vec![packet]).unwrap();
 
         let mut received_packet = tp2.recv().unwrap();
 
-        assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
+        assert_eq!(data, received_packet.remove(0).into_data());
     }
 
     #[test]
     fn try_recv() {
         let (mut tp1, tp2) = new_two_transport();
 
-        let packet = Packet::new(0, 0, new_random_data(80));
+        let packet = Packet::new(0, 0, new_random_data(64));
         tp1.send_burst(vec![packet.clone()]).unwrap();
         sleep_millis(100);
 
@@ -320,7 +329,7 @@ mod tests {
     fn try_recv_not_block() {
         let (mut tp1, tp2) = new_two_transport();
 
-        let packet = Packet::new(0, 0, new_random_data(80));
+        let packet = Packet::new(0, 0, new_random_data(64));
 
         assert!(tp2.try_recv().unwrap().is_empty());
 

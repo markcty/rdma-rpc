@@ -11,14 +11,14 @@ use tracing::debug;
 use crate::{
     error::Error,
     messages::Packet,
-    transport::{Transport, MAX_PACKET_BYTES},
+    transport::{Transport, MAX_DATA_BYTES},
     utils::sleep_millis,
     SlidingWindow,
 };
 
-const MAX_POLL_CQ_RETRY: u32 = 500;
+const MAX_POLL_CQ_RETRY: u32 = 100;
 const POLL_INTERVAL: u32 = 1;
-const WINDOW_SIZE: usize = 2;
+const WINDOW_SIZE: usize = 64;
 
 /// Session provides send/receive between server/client
 /// Session should act like a stream. Users will read/write from this object by using `send_bytes` and `recv_bytes`.
@@ -171,6 +171,7 @@ impl Session {
 
         let mut bytes = self.recv_bytes()?;
         let size = usize::from_be_bytes(bytes[0..8].try_into().unwrap());
+        debug!("need to recv {} bytes", size);
         bytes.reserve(size);
 
         while bytes.len() < size + 8 {
@@ -184,7 +185,7 @@ impl Session {
 
     fn make_packets(&mut self, bytes: Vec<u8>) -> Vec<Packet> {
         bytes
-            .chunks(MAX_PACKET_BYTES)
+            .chunks(MAX_DATA_BYTES)
             .map(|chunk| {
                 let packet = Packet::new(self.seq, self.id, chunk.to_vec());
                 self.seq += 1;
@@ -198,5 +199,110 @@ impl Session {
         if packet.seq() >= self.ack {
             self.recv_buffer.insert(packet.seq(), packet);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use crate::utils::tests::{new_random_data, new_two_transport};
+
+    #[test]
+    fn session_works() {
+        let (tp1, tp2) = new_two_transport();
+        let (mut s1, mut s2) = (Session::new(0, tp1), Session::new(0, tp2));
+
+        let bytes1 = new_random_data(64);
+        let bytes1_c = bytes1.clone();
+        let bytes2 = new_random_data(64);
+        let bytes2_c = bytes2.clone();
+
+        let s1_handle = std::thread::spawn(move || {
+            s1.send_bytes(bytes1.clone()).unwrap();
+            assert_eq!(s1.recv::<Vec<u8>>().unwrap(), bytes2);
+        });
+
+        let s2_handle = std::thread::spawn(move || {
+            assert_eq!(s2.recv_bytes().unwrap(), bytes1_c);
+            s2.send(bytes2_c.clone()).unwrap();
+        });
+
+        s1_handle.join().unwrap();
+        s2_handle.join().unwrap();
+    }
+
+    #[test]
+    // test whether the data will be successfully divided into small packets and received correctly by the remote
+    fn send_bytes_huge() {
+        let (tp1, tp2) = new_two_transport();
+        let (mut s1, mut s2) = (Session::new(0, tp1), Session::new(0, tp2));
+
+        let huge_bytes = new_random_data(4 * 1024 * 1024); // 4MB
+        let huge_bytes_c = huge_bytes.clone(); // 4MB
+
+        let s1_handle = std::thread::spawn(move || {
+            s1.send_bytes(huge_bytes).unwrap();
+        });
+
+        let s2_handle = std::thread::spawn(move || {
+            let mut buffer = vec![];
+            while buffer.len() != huge_bytes_c.len() {
+                let mut bytes = s2.recv_bytes().unwrap();
+                tracing::info!("recv");
+                buffer.append(&mut bytes);
+            }
+            assert_eq!(buffer, huge_bytes_c);
+        });
+
+        s1_handle.join().unwrap();
+        s2_handle.join().unwrap();
+    }
+
+    #[test]
+    // test whether the data will be successfully divided into small packets and received correctly by the remote
+    fn send_huge() {
+        let (tp1, tp2) = new_two_transport();
+        let (mut s1, mut s2) = (Session::new(0, tp1), Session::new(0, tp2));
+
+        let huge_bytes = new_random_data(4 * 1024 * 1024); // 4MB
+        let huge_bytes_c = huge_bytes.clone(); // 4MB
+
+        let s1_handle = std::thread::spawn(move || {
+            s1.send(huge_bytes).unwrap();
+        });
+
+        let s2_handle = std::thread::spawn(move || {
+            assert_eq!(s2.recv::<Vec<u8>>().unwrap(), huge_bytes_c);
+        });
+
+        s1_handle.join().unwrap();
+        s2_handle.join().unwrap();
+    }
+
+    #[test]
+    // send 1000 small packets
+    fn send_small_packets() {
+        const N_PACKETS: usize = 1000;
+        let (tp1, tp2) = new_two_transport();
+        let (mut s1, mut s2) = (Session::new(0, tp1), Session::new(0, tp2));
+
+        let bytes = new_random_data(64);
+
+        let s1_handle = std::thread::spawn(move || {
+            for _ in 0..N_PACKETS {
+                s1.send_bytes(bytes.clone()).unwrap();
+            }
+        });
+
+        let s2_handle = std::thread::spawn(move || {
+            for _ in 0..N_PACKETS {
+                s2.recv_bytes().unwrap();
+            }
+        });
+
+        s1_handle.join().unwrap();
+        s2_handle.join().unwrap();
     }
 }
