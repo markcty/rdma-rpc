@@ -1,6 +1,6 @@
+use alloc::vec::Vec;
 use core::{cmp::Ordering, fmt::Display};
 
-use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use KRdmaKit::services_user::ibv_gid_wrapper;
 
@@ -10,7 +10,6 @@ pub(crate) struct Packet {
     is_ack: bool,
     ack_num: u64,
     seq_num: u64,
-    total_num: u64,
     session_id: u64,
     data: Vec<u8>,
 }
@@ -21,18 +20,16 @@ impl Packet {
             is_ack: true,
             ack_num,
             seq_num: 0,
-            total_num: 0,
             session_id,
             data: Vec::new(),
         }
     }
 
-    pub(crate) fn new(seq_num: u64, session_id: u64, data: Vec<u8>, total_num: u64) -> Packet {
+    pub(crate) fn new(seq_num: u64, session_id: u64, data: Vec<u8>) -> Packet {
         Self {
             is_ack: false,
             ack_num: 0,
             seq_num,
-            total_num,
             session_id,
             data,
         }
@@ -50,16 +47,12 @@ impl Packet {
         self.seq_num
     }
 
-    pub(crate) fn total_num(&self) -> u64 {
-        self.total_num
-    }
-
-    pub(crate) fn data(&self) -> &[u8] {
-        self.data.as_slice()
-    }
-
     pub(crate) fn is_ack(&self) -> bool {
         self.is_ack
+    }
+
+    pub(crate) fn into_data(self) -> Vec<u8> {
+        self.data
     }
 }
 

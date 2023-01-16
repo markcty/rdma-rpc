@@ -1,4 +1,5 @@
 use alloc::{collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec};
+
 use tracing::{debug, error, info};
 use KRdmaKit::{
     context::Context,
@@ -10,10 +11,12 @@ use crate::{
     error::Error,
     messages::{Packet, QPInfo},
 };
-const BUF_SIZE: u64 = 4096; // 4KB
+pub const MTU: u64 = 1024;
+const BUF_SIZE: u64 = MTU; // 4KB
 const UD_DATA_OFFSET: usize = 40; // for a UD message, the first 40 bytes are reserved for GRH
-pub(crate) const MAX_PACKET_BYTES: usize = BUF_SIZE as usize - UD_DATA_OFFSET;
-const POOL_SIZE: u8 = 8; // how many mrs are in a mr pool
+const MAX_PACKET_BYTES: usize = BUF_SIZE as usize - UD_DATA_OFFSET;
+pub(crate) const MAX_DATA_BYTES: usize = MAX_PACKET_BYTES - 33; // reserve for packet meta
+const POOL_SIZE: u8 = 64; // how many mrs are there in a mr pool
 
 struct MemoryRegionWrapper {
     mr: Arc<MemoryRegion>,
@@ -167,11 +170,12 @@ impl Transport {
                 let buffer: &mut [u8] = unsafe {
                     alloc::slice::from_raw_parts_mut(mr.get_virt_addr() as _, BUF_SIZE as usize)
                 };
-                bincode::serialize_into(buffer, packet)?;
                 let size = bincode::serialized_size(packet)?;
+                assert!((size as usize) <= MAX_PACKET_BYTES);
+                bincode::serialize_into(buffer, packet)?;
 
                 // post send
-                debug!("send 1 packet");
+                debug!("send 1 packet, size: {size}");
                 self.qp
                     .post_datagram(&self.endpoint, &mr, 0..size, id, true)
                     .map_err(|err| {
@@ -222,6 +226,40 @@ impl Transport {
         Ok(packets)
     }
 
+    pub(crate) fn try_recv(&self) -> Result<Vec<Packet>, Error> {
+        // poll recv cq
+        let mut wcs = [Default::default(); POOL_SIZE as usize];
+        let res = self
+            .qp
+            .poll_recv_cq(&mut wcs)
+            .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
+
+        let mut packets = Vec::new();
+        for wc in res {
+            // deserialize arg
+            let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
+            let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
+            let msg: Packet = bincode::deserialize(unsafe {
+                alloc::slice::from_raw_parts(
+                    (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
+                    msg_sz,
+                )
+            })?; // TODO: post recv when handle error
+            packets.push(msg);
+
+            // post recv
+            self.qp
+                .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
+                .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
+        }
+
+        if !packets.is_empty() {
+            debug!("recv {} packets", packets.len());
+        }
+
+        Ok(packets)
+    }
+
     pub(crate) fn send_burst(&mut self, packets: Vec<Packet>) -> Result<(), Error> {
         let len = packets.len();
         let mut left_to_be_sent: usize = len;
@@ -234,38 +272,6 @@ impl Transport {
         }
     }
 
-    pub(crate) fn try_recv(&self) -> Result<Option<Packet>, Error> {
-        // poll recv cq
-        let mut wcs = [Default::default()];
-        let res = self
-            .qp
-            .poll_recv_cq(&mut wcs)
-            .map_err(|err| Error::Internal(format!("failed to poll cq, {err}")))?;
-
-        if res.is_empty() {
-            return Ok(None);
-        }
-
-        let wc = wcs[0];
-
-        // deserialize arg
-        let mr = self.recv_mrs.get_mr_with_id(wc.wr_id)?;
-        let msg_sz = wc.byte_len as usize - UD_DATA_OFFSET;
-        let packet: Packet = bincode::deserialize(unsafe {
-            alloc::slice::from_raw_parts(
-                (mr.get_virt_addr() as usize + UD_DATA_OFFSET) as *mut u8,
-                msg_sz,
-            )
-        })?;
-
-        // post recv again
-        self.qp
-            .post_recv(&mr, 0..BUF_SIZE, wc.wr_id)
-            .map_err(|err| Error::Internal(alloc::format!("internal error: {err}")))?;
-
-        Ok(Some(packet))
-    }
-
     pub fn qp_info(&self) -> QPInfo {
         QPInfo {
             lid: self.qp.lid().unwrap(),
@@ -273,5 +279,61 @@ impl Transport {
             qp_num: self.qp.qp_num(),
             qkey: self.qp.qkey(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use crate::{
+        messages::Packet,
+        transport::MAX_DATA_BYTES,
+        utils::{
+            sleep_millis,
+            tests::{new_random_data, new_two_transport},
+        },
+    };
+
+    #[test]
+    fn it_works() {
+        let (mut tp1, tp2) = new_two_transport();
+
+        let data = new_random_data(MAX_DATA_BYTES);
+        let packet = Packet::new(0, 0, data.clone());
+        tp1.send_burst(vec![packet]).unwrap();
+
+        let mut received_packet = tp2.recv().unwrap();
+
+        assert_eq!(data, received_packet.remove(0).into_data());
+    }
+
+    #[test]
+    fn try_recv() {
+        let (mut tp1, tp2) = new_two_transport();
+
+        let packet = Packet::new(0, 0, new_random_data(64));
+        tp1.send_burst(vec![packet.clone()]).unwrap();
+        sleep_millis(100);
+
+        let mut received_packet = tp2.try_recv().unwrap();
+
+        assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
+    }
+
+    #[test]
+    fn try_recv_not_block() {
+        let (mut tp1, tp2) = new_two_transport();
+
+        let packet = Packet::new(0, 0, new_random_data(64));
+
+        assert!(tp2.try_recv().unwrap().is_empty());
+
+        tp1.send_burst(vec![packet.clone()]).unwrap();
+        sleep_millis(100);
+
+        let mut received_packet = tp2.recv().unwrap();
+
+        assert_eq!(packet.into_data(), received_packet.remove(0).into_data());
     }
 }
