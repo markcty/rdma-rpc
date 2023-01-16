@@ -23,6 +23,7 @@ fn main() {
     std::thread::spawn(move || server.serve());
 
     let resp: Resp = client.sync_call(Args::Put(1, 1)).unwrap();
+    println!("put i = 1 to server");
     assert!(matches!(resp, Resp::Put));
 
     loop {
@@ -32,9 +33,11 @@ fn main() {
         } else {
             panic!("something went wrong");
         };
+        println!("get i = {i}");
+
         let resp: Resp = client.sync_call(Args::Put(1, i + 1)).unwrap();
         assert!(matches!(resp, Resp::Put));
-        println!("{i}");
+        println!("put i = {}+1 to server", i);
 
         std::thread::sleep(Duration::from_millis(500));
     }
